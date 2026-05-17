@@ -129,7 +129,30 @@ function setActive(id) {
   const el = document.querySelector(`.sidebar__item[data-id="${CSS.escape(id)}"]`);
   if (el) {
     el.classList.add('sidebar__item--active');
-    el.scrollIntoView({ block: 'nearest' });
+    scrollSidebarItemIntoView(el);
+  }
+}
+
+/**
+ * Scroll ONLY the sidebar so the active item is visible.
+ *
+ * Native el.scrollIntoView() walks up every scrollable ancestor and may end
+ * up scrolling the document itself, snapping the page back to the top while
+ * the user is scrolling content. We manipulate sidebar.scrollTop directly
+ * so the document is never touched.
+ */
+function scrollSidebarItemIntoView(el) {
+  const sidebar = el.closest('.sidebar');
+  if (!sidebar) return;
+
+  const PAD = 8;
+  const elRect = el.getBoundingClientRect();
+  const sRect = sidebar.getBoundingClientRect();
+
+  if (elRect.top < sRect.top + PAD) {
+    sidebar.scrollTop += elRect.top - sRect.top - PAD;
+  } else if (elRect.bottom > sRect.bottom - PAD) {
+    sidebar.scrollTop += elRect.bottom - sRect.bottom + PAD;
   }
 }
 
