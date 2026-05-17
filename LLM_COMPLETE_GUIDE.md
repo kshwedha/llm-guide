@@ -1,4 +1,4 @@
-# The Complete LLM Engineering Bible
+# The Complete LLM Engineering Guide
 
 ## From First Principles to Production Systems at Scale
 
