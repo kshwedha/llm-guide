@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Auto-regressive Generation — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Operations · Generation</span>
+      <h1 class="viz-page__title">Auto-regressive Generation</h1>
+      <p class="viz-page__subtitle">The fundamental loop. Pick a prompt, then "Step" to watch the model emit one token at a time — softmax over the vocabulary, sample, append, repeat. The substituted equation shows the live top-5 distribution for the current step.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control">
+        <label class="viz-control__label" for="prompt-select">Prompt</label>
+        <select id="prompt-select">
+          <option value="0">"The cat sat on the"</option>
+          <option value="1">"To compile a Rust program, you"</option>
+          <option value="2">"Once upon a time"</option>
+          <option value="3">"The capital of France is"</option>
+        </select>
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="strategy-select">Strategy</label>
+        <select id="strategy-select">
+          <option value="argmax">Greedy (argmax)</option>
+          <option value="sample">Sample (top-1 of softmax)</option>
+        </select>
+      </div>
+      <button id="step-btn" class="viz-btn" type="button">Step ▸</button>
+      <button id="run-btn" class="viz-btn viz-btn--secondary" type="button">Run all</button>
+      <button id="reset-btn" class="viz-btn viz-btn--secondary" type="button">Reset</button>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · context grows token by token</div>
+        <svg id="viz-pane" viewBox="0 0 720 380" role="img"></svg>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The auto-regressive loop</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">This step · top-5 candidates</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome · generated text</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    /* Each prompt is paired with a scripted continuation:
+       at each step we expose the top-5 candidate next tokens (with probabilities)
+       and the token the model picks. The probabilities are illustrative — the
+       point is the loop, not the LM's true distribution. */
+    const SCRIPTS = [
+      {
+        prompt: "The cat sat on the",
+        steps: [
+          { top: [[" mat",0.42],[" floor",0.18],[" chair",0.13],[" couch",0.10],[" rug",0.07]], pick: 0 },
+          { top: [[",",0.36],[" and",0.24],[".",0.18],[" while",0.10],[" silently",0.06]], pick: 0 },
+          { top: [[" purring",0.32],[" dreaming",0.22],[" watching",0.14],[" napping",0.12],[" curled",0.10]], pick: 0 },
+          { top: [[" softly",0.41],[" loudly",0.16],[" gently",0.14],[" rhythmically",0.11],[" peacefully",0.10]], pick: 0 },
+          { top: [[".",0.55],[",",0.18],[" while",0.10],[" beside",0.08],[" amid",0.05]], pick: 0 },
+        ],
+      },
+      {
+        prompt: "To compile a Rust program, you",
+        steps: [
+          { top: [[" use",0.39],[" run",0.22],[" need",0.15],[" type",0.10],[" invoke",0.09]], pick: 0 },
+          { top: [[" cargo",0.61],[" rustc",0.21],[" the",0.07],[" Rust's",0.06],[" your",0.04]], pick: 0 },
+          { top: [[" build",0.42],[" run",0.31],[" check",0.12],[" compile",0.08],[" --release",0.05]], pick: 0 },
+          { top: [[" or",0.30],[",",0.24],["; this",0.15],["—the",0.13],[".",0.12]], pick: 0 },
+          { top: [[" cargo",0.46],[" the",0.18],[" rustc",0.15],[" simply",0.11],[" plain",0.08]], pick: 0 },
+        ],
+      },
+      {
+        prompt: "Once upon a time",
+        steps: [
+          { top: [[",",0.61],[" there",0.18],[" in",0.10],[" a",0.06],[" long",0.04]], pick: 0 },
+          { top: [[" in",0.34],[" there",0.30],[" a",0.16],[" deep",0.12],[" before",0.06]], pick: 0 },
+          { top: [[" a",0.43],[" the",0.21],[" lands",0.14],[" forests",0.13],[" castles",0.07]], pick: 0 },
+          { top: [[" small",0.31],[" quiet",0.21],[" forgotten",0.18],[" lonely",0.16],[" magical",0.12]], pick: 0 },
+          { top: [[" village",0.46],[" kingdom",0.20],[" town",0.16],[" city",0.10],[" hamlet",0.06]], pick: 0 },
+        ],
+      },
+      {
+        prompt: "The capital of France is",
+        steps: [
+          { top: [[" Paris",0.92],[" Lyon",0.03],[" Marseille",0.02],[" Bordeaux",0.02],[" Nice",0.01]], pick: 0 },
+          { top: [[",",0.42],[".",0.40],[" —",0.10],[";",0.05],[" which",0.03]], pick: 1 },
+          { top: [[" It",0.28],[" Paris",0.22],[" The",0.18],[" Located",0.18],[" Famous",0.14]], pick: 0 },
+          { top: [[" is",0.61],[" lies",0.16],[" sits",0.10],[" was",0.08],[" remains",0.05]], pick: 0 },
+          { top: [[" home",0.31],[" famous",0.22],[" the",0.20],[" known",0.15],[" filled",0.12]], pick: 0 },
+        ],
+      },
+    ];
+
+    const state = { idx: 0, step: 0, strategy: 'argmax', generated: '' };
+
+    function reset() {
+      state.idx = Number(document.getElementById('prompt-select').value);
+      state.step = 0;
+      state.generated = '';
+      state.strategy = document.getElementById('strategy-select').value;
+      update();
+    }
+
+    function step() {
+      const script = SCRIPTS[state.idx];
+      if (state.step >= script.steps.length) return;
+      const s = script.steps[state.step];
+      const choice = state.strategy === 'argmax' ? s.pick :
+                     /* draw a sample weighted by displayed probabilities */
+                     pickWeighted(s.top.map(t => t[1]));
+      state.generated += s.top[choice][0];
+      state.step++;
+      update();
+    }
+
+    function pickWeighted(p) {
+      let r = Math.random() * p.reduce((a, b) => a + b, 0);
+      for (let i = 0; i < p.length; i++) { r -= p[i]; if (r <= 0) return i; }
+      return p.length - 1;
+    }
+
+    function update() {
+      const script = SCRIPTS[state.idx];
+      const done = state.step >= script.steps.length;
+      const lastStep = done ? null : script.steps[state.step];
+
+      /* ── Pane 1 — visual ── */
+      const svg = document.getElementById('viz-pane');
+      svg.innerHTML = '';
+      const W = 720, H = 380;
+      const muted = Viz.color('--fg-muted');
+      const accent = Viz.color('--accent');
+      const c3 = Viz.color('--c-3');
+
+      /* Top: prompt + generated text with cursor */
+      const pTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      pTxt.setAttribute('x', 30); pTxt.setAttribute('y', 36);
+      pTxt.setAttribute('font-family', 'JetBrains Mono'); pTxt.setAttribute('font-size', 16);
+      pTxt.setAttribute('fill', Viz.color('--fg'));
+      pTxt.innerHTML =
+        `<tspan fill="${muted}">${escapeXml(script.prompt)}</tspan>` +
+        `<tspan fill="${accent}" font-weight="700">${escapeXml(state.generated)}</tspan>` +
+        (done ? '' : `<tspan fill="${c3}" font-weight="700">▍</tspan>`);
+      svg.appendChild(pTxt);
+
+      /* Subtitle */
+      const sub = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      sub.setAttribute('x', 30); sub.setAttribute('y', 60);
+      sub.setAttribute('font-size', 12); sub.setAttribute('fill', muted);
+      sub.textContent = done ? 'generation complete' :
+        `step ${state.step + 1} / ${script.steps.length} — sampling next token from softmax over vocabulary`;
+      svg.appendChild(sub);
+
+      /* Top-5 bar chart for current step */
+      if (!done) {
+        const top = lastStep.top;
+        const chartTop = 90, chartH = 260;
+        const padL = 140, padR = 30;
+        const maxW = W - padL - padR;
+
+        top.forEach((t, i) => {
+          const y = chartTop + i * (chartH / top.length);
+          const w = t[1] * maxW;
+
+          const tlabel = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          tlabel.setAttribute('x', padL - 8); tlabel.setAttribute('y', y + 22);
+          tlabel.setAttribute('text-anchor', 'end'); tlabel.setAttribute('font-size', 13);
+          tlabel.setAttribute('font-family', 'JetBrains Mono');
+          tlabel.setAttribute('fill', i === lastStep.pick ? accent : Viz.color('--fg'));
+          tlabel.setAttribute('font-weight', i === lastStep.pick ? 700 : 500);
+          tlabel.textContent = JSON.stringify(t[0]);
+          svg.appendChild(tlabel);
+
+          const bar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          bar.setAttribute('x', padL); bar.setAttribute('y', y + 8);
+          bar.setAttribute('width', Math.max(2, w)); bar.setAttribute('height', 28);
+          bar.setAttribute('rx', 4);
+          bar.setAttribute('fill', i === lastStep.pick ? accent : Viz.color('--border-strong'));
+          bar.setAttribute('opacity', i === lastStep.pick ? 1 : 0.65);
+          svg.appendChild(bar);
+
+          const v = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          v.setAttribute('x', padL + Math.max(2, w) + 8); v.setAttribute('y', y + 27);
+          v.setAttribute('font-size', 12); v.setAttribute('font-family', 'JetBrains Mono');
+          v.setAttribute('fill', muted);
+          v.textContent = `p = ${t[1].toFixed(2)}`;
+          svg.appendChild(v);
+        });
+      }
+
+      /* ── Pane 2 / 3 — equations ── */
+      const subRows = done ? '\\text{generation complete}' :
+        lastStep.top.map((t, i) =>
+          `P(${JSON.stringify(t[0]).replace(/\"/g,'\\text{"}')}\\!=y_{${state.step+1}}\\,|\\,y_{<${state.step+1}}) &= ${t[1].toFixed(3)}${i === lastStep.pick ? '\\;\\checkmark' : ''}`
+        ).join('\\\\\n');
+
+      Viz.renderEquations(
+        `\\text{for } t = 1, 2, \\ldots, T:\\\\[2pt] y_t \\sim \\mathrm{softmax}\\!\\left(\\dfrac{f_\\theta(x, y_{<t})}{T}\\right)\\\\[2pt] \\text{append } y_t \\text{ to context, repeat}`,
+        `\\begin{aligned} ${subRows.replace(/\\text\{"\}/g, '\\texttt{"}')} \\end{aligned}`
+      );
+
+      /* ── Pane 4 — outcome ── */
+      Viz.setOutput(document.getElementById('output-pane'), [
+        { label: 'prompt', value: `"${script.prompt}"` },
+        { label: 'generated', value: `"${state.generated}"`, accent: true },
+        { label: 'tokens emitted', value: state.step },
+        { label: 'remaining', value: script.steps.length - state.step },
+        { label: 'strategy', value: state.strategy },
+      ]);
+    }
+
+    function escapeXml(s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    document.getElementById('prompt-select').addEventListener('change', reset);
+    document.getElementById('strategy-select').addEventListener('change', reset);
+    document.getElementById('step-btn').addEventListener('click', step);
+    document.getElementById('reset-btn').addEventListener('click', reset);
+    document.getElementById('run-btn').addEventListener('click', () => {
+      reset();
+      const tick = () => {
+        if (state.step < SCRIPTS[state.idx].steps.length) {
+          step();
+          setTimeout(tick, 350);
+        }
+      };
+      setTimeout(tick, 300);
+    });
+    window.addEventListener('themechange', update);
+    reset();
+  });
+  </script>
+</body>
+</html>

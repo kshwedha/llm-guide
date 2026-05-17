@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Drawing as Generation — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Operations · Drawing</span>
+      <h1 class="viz-page__title">Drawing as Token Prediction</h1>
+      <p class="viz-page__subtitle">"Draw a cat in ASCII" is just generation over a structured grammar. Each character (including spaces and newlines) is a single token. Watch the picture emerge one token at a time, with the live top-3 candidate characters at every step.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control">
+        <label class="viz-control__label" for="draw-select">Picture</label>
+        <select id="draw-select">
+          <option value="0">Cat</option>
+          <option value="1">Tree</option>
+          <option value="2">Heart</option>
+          <option value="3">House</option>
+        </select>
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="speed-slider">Speed (ms / token) <span class="viz-control__value" id="speed-value">120</span></label>
+        <input id="speed-slider" type="range" min="40" max="400" step="20" value="120">
+      </div>
+      <button id="step-btn" class="viz-btn" type="button">Step ▸</button>
+      <button id="run-btn" class="viz-btn viz-btn--secondary" type="button">Auto draw</button>
+      <button id="reset-btn" class="viz-btn viz-btn--secondary" type="button">Reset</button>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · canvas + token cursor</div>
+        <svg id="viz-pane" viewBox="0 0 720 380" role="img"></svg>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The formula</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">This step · top-3 candidates</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome · drawing progress</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    const PICTURES = [
+      {
+        title: "Cat",
+        art: [
+          "  /\\_/\\  ",
+          " ( o.o ) ",
+          "  > ^ <  ",
+        ],
+      },
+      {
+        title: "Tree",
+        art: [
+          "    *    ",
+          "   /|\\   ",
+          "  / | \\  ",
+          " /  |  \\ ",
+          "/_______\\",
+          "   |||   ",
+        ],
+      },
+      {
+        title: "Heart",
+        art: [
+          " /\\  /\\ ",
+          "/  \\/  \\",
+          "\\      /",
+          " \\    / ",
+          "  \\  /  ",
+          "   \\/   ",
+        ],
+      },
+      {
+        title: "House",
+        art: [
+          "    /\\    ",
+          "   /  \\   ",
+          "  /____\\  ",
+          "  | [] |  ",
+          "  | __ |  ",
+          "  ||  ||  ",
+        ],
+      },
+    ];
+
+    /* Helpers — for each step, the "true" next character is the canonical
+       one with high probability; we add 2 plausible distractors with smaller
+       probability so the top-3 distribution looks LM-like. */
+    function flatten(art) {
+      return art.join('\n');
+    }
+
+    function distractorsFor(ch) {
+      /* Pick visually similar / nearby ASCII alternatives so the substituted
+         equation looks realistic (no actual model is involved). */
+      const map = {
+        ' ': ['_', '.', '-'],
+        '/': ['|', '\\', '_'],
+        '\\': ['|', '/', '_'],
+        '|': ['/', '\\', '!'],
+        '_': ['-', '~', '.'],
+        '-': ['_', '~', '='],
+        '*': ['+', 'o', '.'],
+        '(': ['[', '{', '<'],
+        ')': [']', '}', '>'],
+        '<': ['(', '[', '{'],
+        '>': [')', ']', '}'],
+        '^': ['~', '*', '+'],
+        '.': [',', ':', '\''],
+        '\n': [' ', '.', '|'],
+      };
+      const cand = map[ch] || ['.', ',', '_'];
+      return cand.slice(0, 2);
+    }
+
+    const state = { idx: 0, step: 0, full: '', timer: null };
+
+    function reset() {
+      state.idx = Number(document.getElementById('draw-select').value);
+      state.step = 0;
+      state.full = flatten(PICTURES[state.idx].art);
+      stopAuto();
+      update();
+    }
+
+    function step() {
+      if (state.step < state.full.length) state.step++;
+      update();
+    }
+
+    function startAuto() {
+      stopAuto();
+      const speed = Number(document.getElementById('speed-slider').value);
+      state.timer = setInterval(() => {
+        if (state.step < state.full.length) step();
+        else stopAuto();
+      }, speed);
+    }
+    function stopAuto() { if (state.timer) { clearInterval(state.timer); state.timer = null; } }
+
+    function update() {
+      document.getElementById('speed-value').textContent =
+        Number(document.getElementById('speed-slider').value).toFixed(0);
+
+      const pic = PICTURES[state.idx];
+      const drawn = state.full.slice(0, state.step);
+      const done = state.step >= state.full.length;
+      const nextCh = done ? null : state.full[state.step];
+
+      /* Build top-3 with the true char at p≈0.7 + 2 distractors */
+      const top3 = nextCh === null ? [] : (() => {
+        const distractors = distractorsFor(nextCh);
+        return [
+          [nextCh, 0.74],
+          [distractors[0], 0.16],
+          [distractors[1], 0.06],
+        ];
+      })();
+
+      /* ── Pane 1 — render canvas ── */
+      const svg = document.getElementById('viz-pane');
+      svg.innerHTML = '';
+      const W = 720, H = 380;
+      const accent = Viz.color('--accent');
+      const muted = Viz.color('--fg-muted');
+
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      title.setAttribute('x', 30); title.setAttribute('y', 26);
+      title.setAttribute('font-size', 13); title.setAttribute('fill', muted);
+      title.textContent = `Prompt: "Draw a ${pic.title.toLowerCase()} in ASCII"`;
+      svg.appendChild(title);
+
+      /* Render the picture, character by character, in monospace.
+         Newlines become row breaks. The token cursor blinks at the end. */
+      const startX = 220, startY = 78, lineH = 26, charW = 14;
+      const drawnLines = drawn.split('\n');
+      const totalLines = state.full.split('\n').length;
+      const offY = (H - 60 - totalLines * lineH) / 2;
+
+      drawnLines.forEach((line, lineIdx) => {
+        const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        t.setAttribute('x', startX);
+        t.setAttribute('y', startY + offY + lineIdx * lineH);
+        t.setAttribute('font-size', 22); t.setAttribute('font-family', 'JetBrains Mono');
+        t.setAttribute('fill', Viz.color('--fg'));
+        t.setAttribute('xml:space', 'preserve');
+        t.textContent = line;
+        svg.appendChild(t);
+      });
+
+      /* Cursor */
+      if (!done) {
+        const lastLine = drawnLines[drawnLines.length - 1];
+        const cursorX = startX + lastLine.length * charW;
+        const cursorY = startY + offY + (drawnLines.length - 1) * lineH;
+        const cursor = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        cursor.setAttribute('x', cursorX);
+        cursor.setAttribute('y', cursorY - 18);
+        cursor.setAttribute('width', 12); cursor.setAttribute('height', 22);
+        cursor.setAttribute('fill', accent);
+        cursor.setAttribute('opacity', 0.85);
+        svg.appendChild(cursor);
+      }
+
+      /* ── Equations ── */
+      const subRows = done ? '\\text{drawing complete}' :
+        top3.map((t, i) => {
+          const ch = t[0] === '\n' ? '\\n' : t[0] === ' ' ? '\\;\\square\\;' : t[0];
+          const safe = ch === '\\n' ? '\\text{\\textbackslash n}' :
+                      ch === '\\;\\square\\;' ? '\\text{\\textvisiblespace}' :
+                      `\\texttt{${ch.replace(/\\/g, '\\textbackslash{}')}}`;
+          return `p(${safe} \\mid \\text{drawn so far}) &= ${t[1].toFixed(2)}${i === 0 ? '\\;\\checkmark' : ''}`;
+        }).join('\\\\\n');
+
+      Viz.renderEquations(
+        `y_t \\sim P(\\cdot \\mid \\text{prompt}, y_{<t})\\\\[2pt] \\text{vocabulary} = \\text{ASCII characters} \\cup \\{\\text{newline}\\}`,
+        `\\begin{aligned} ${subRows} \\end{aligned}`
+      );
+
+      /* ── Outcome ── */
+      const linesDone = drawnLines.length;
+      const totalChars = state.full.length;
+      Viz.setOutput(document.getElementById('output-pane'), [
+        { label: 'tokens emitted', value: state.step + ' / ' + totalChars },
+        { label: 'progress',       value: (state.step / totalChars * 100).toFixed(1) + '%' },
+        { label: 'lines drawn',    value: linesDone + ' / ' + totalLines },
+        { label: 'next token',     value: done ? '— complete —' : (nextCh === '\n' ? '\\n (newline)' : nextCh === ' ' ? '␣ (space)' : `"${nextCh}"`) },
+        { label: 'status',         value: done ? 'finished' : 'drawing', accent: done },
+      ]);
+    }
+
+    document.getElementById('draw-select').addEventListener('change', reset);
+    document.getElementById('speed-slider').addEventListener('input', () => {
+      update();
+      if (state.timer) startAuto();
+    });
+    document.getElementById('step-btn').addEventListener('click', () => { stopAuto(); step(); });
+    document.getElementById('run-btn').addEventListener('click', startAuto);
+    document.getElementById('reset-btn').addEventListener('click', reset);
+    window.addEventListener('themechange', update);
+    reset();
+  });
+  </script>
+</body>
+</html>

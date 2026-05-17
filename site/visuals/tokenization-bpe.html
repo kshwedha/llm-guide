@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BPE Tokenization — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+  <style>
+    body{font-family:'Inter',var(--sans);}
+    .token-row { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0; align-items: center;}
+    .token { font-family: 'JetBrains Mono', monospace; font-size: 13px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border);}
+    .token--merged { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600;}
+    .step-pill { display: inline-block; font-size: 11px; padding: 2px 7px; border-radius: 12px; background: var(--bg-sidebar); color: var(--fg-muted); margin-right: 8px; font-family: 'JetBrains Mono', monospace;}
+    .merge-rule { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--fg-muted);}
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Tokenization · Chapter 6</span>
+      <h1 class="viz-page__title">BPE Tokenization</h1>
+      <p class="viz-page__subtitle">Train a tiny byte-pair encoder on your corpus and watch every merge rule fire from characters into words. The substituted pane shows the most recent merge with its frequency count.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control" style="flex: 1; min-width: 320px;">
+        <label class="viz-control__label" for="corpus-input">Training corpus</label>
+        <input id="corpus-input" type="text" value="low lower newest widest lowest new low lower">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="merges-slider">Number of merges <span class="viz-control__value" id="merges-value">10</span></label>
+        <input id="merges-slider" type="range" min="0" max="30" step="1" value="10">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="encode-input">Encode this text</label>
+        <input id="encode-input" type="text" value="lowest newest">
+      </div>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · merge history</div>
+        <div id="viz-pane" style="font-size: 13px;"></div>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The update rule</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">This iteration · winning merge</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome · encoding</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    /* Train BPE on a list of words. End-of-word marker '_'. */
+    function trainBPE(words, numMerges) {
+      const corpus = words.map((w) => [...w, '_']);
+      const merges = [];
+      const histories = [{ corpus: corpus.map((s) => [...s]), merge: null, freq: 0 }];
+
+      for (let m = 0; m < numMerges; m++) {
+        const pairs = new Map();
+        corpus.forEach((seq) => {
+          for (let i = 0; i < seq.length - 1; i++) {
+            const key = `${seq[i]}\u0001${seq[i + 1]}`;
+            pairs.set(key, (pairs.get(key) || 0) + 1);
+          }
+        });
+        if (pairs.size === 0) break;
+        let best = null, bestC = 0;
+        pairs.forEach((c, k) => { if (c > bestC) { bestC = c; best = k; } });
+        const [a, b] = best.split('\u0001');
+        merges.push([a, b]);
+        for (const seq of corpus) {
+          for (let i = 0; i < seq.length - 1; i++) {
+            if (seq[i] === a && seq[i + 1] === b) {
+              seq.splice(i, 2, a + b);
+            }
+          }
+        }
+        histories.push({ corpus: corpus.map((s) => [...s]), merge: [a, b], freq: bestC });
+      }
+      return { merges, histories };
+    }
+
+    function encodeWithBPE(text, merges) {
+      const tokens = text.split(/\s+/).filter(Boolean).map((w) => [...w, '_']);
+      for (const [a, b] of merges) {
+        for (const seq of tokens) {
+          for (let i = 0; i < seq.length - 1; i++) {
+            if (seq[i] === a && seq[i + 1] === b) {
+              seq.splice(i, 2, a + b);
+              i--;
+            }
+          }
+        }
+      }
+      return tokens.flat();
+    }
+
+    function update() {
+      const corpus = document.getElementById('corpus-input').value;
+      const numMerges = Number(document.getElementById('merges-slider').value);
+      const toEncode = document.getElementById('encode-input').value;
+      document.getElementById('merges-value').textContent = numMerges;
+      const words = corpus.split(/\s+/).filter(Boolean);
+
+      const { merges, histories } = trainBPE(words, numMerges);
+
+      /* Pane 1 — render every step */
+      const viz = document.getElementById('viz-pane');
+      viz.innerHTML = '';
+      histories.forEach((h, idx) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'token-row';
+        const pill = document.createElement('span');
+        pill.className = 'step-pill';
+        pill.textContent = idx === 0 ? 'init' : `merge ${idx}`;
+        wrap.appendChild(pill);
+
+        if (h.merge) {
+          const r = document.createElement('span');
+          r.className = 'merge-rule';
+          r.textContent = `(${h.merge[0]}, ${h.merge[1]}) → ${h.merge[0]}${h.merge[1]}  · count=${h.freq}`;
+          wrap.appendChild(r);
+        }
+
+        const flatRow = document.createElement('div');
+        flatRow.className = 'token-row';
+        flatRow.style.marginLeft = '12px';
+        h.corpus.forEach((seq, wi) => {
+          seq.forEach((tok) => {
+            const t = document.createElement('span');
+            t.className = 'token' + (h.merge && tok === h.merge[0] + h.merge[1] ? ' token--merged' : '');
+            t.textContent = tok.replace('_', '·');
+            flatRow.appendChild(t);
+          });
+          if (wi < h.corpus.length - 1) {
+            const sep = document.createElement('span'); sep.style.color = 'var(--fg-faint)'; sep.textContent = '|';
+            flatRow.appendChild(sep);
+          }
+        });
+
+        viz.appendChild(wrap);
+        viz.appendChild(flatRow);
+      });
+
+      /* Equations — abstract + substituted (last merge as the "current op") */
+      const last = histories[histories.length - 1];
+      let subLatex;
+      if (last.merge) {
+        const [a, b] = last.merge;
+        const safe = (s) => s.replace(/_/g, '\\_').replace(/\s/g, '\\,');
+        subLatex = `\\begin{aligned}
+          \\text{merge step} &: ${merges.length} \\\\
+          \\arg\\max\\,(\\hat a,\\hat b) &= (\\text{${safe(a)}},\\,\\text{${safe(b)}}) \\\\
+          \\text{count} &= ${last.freq} \\\\
+          \\text{vocab} &\\mathrel{+}= \\text{${safe(a + b)}}
+        \\end{aligned}`;
+      } else {
+        subLatex = `\\text{no merges yet — increase the slider}`;
+      }
+      Viz.renderEquations(
+        `(\\hat a, \\hat b) = \\arg\\max_{(a,b)}\\,\\text{count}(a, b)\\\\[2pt] \\text{merge: } (a,b) \\to ab`,
+        subLatex
+      );
+
+      /* Encoding */
+      const enc = encodeWithBPE(toEncode, merges);
+      const vocab = Array.from(new Set(histories[histories.length - 1].corpus.flat()));
+      Viz.setOutput(document.getElementById('output-pane'), [
+        { label: 'input text', value: `"${toEncode}"` },
+        { label: 'tokens', value: enc.map((t) => t.replace('_', '·')).join(' | '), accent: true },
+        { label: '# tokens', value: enc.length, accent: true },
+        { label: 'final vocabulary size', value: vocab.length },
+        { label: 'compression ratio', value: `${(toEncode.replace(/\s/g, '').length / enc.length).toFixed(2)} chars/token` },
+      ]);
+    }
+
+    document.getElementById('corpus-input').addEventListener('input', Viz.debounce(update, 200));
+    document.getElementById('merges-slider').addEventListener('input', update);
+    document.getElementById('encode-input').addEventListener('input', Viz.debounce(update, 200));
+
+    update();
+  });
+  </script>
+</body>
+</html>

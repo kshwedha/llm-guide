@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Visualization Gallery — LLM Engineering Bible</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible <small>· Visualizations</small></div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="../index.html" class="header__btn">← Back to reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="gallery">
+    <section class="gallery__hero">
+      <span class="gallery__hero-tag">Interactive · 18 visualizations</span>
+      <h1 class="gallery__title">See how LLMs<br>actually work</h1>
+      <p class="gallery__subtitle">
+        Eighteen hands-on visualizations split into two layers:
+        <strong>twelve mechanics</strong> (attention, softmax, normalization, training, decoding…) and
+        <strong>six user-facing operations</strong> (generation, rating, ranking, classification, drawing, math reasoning).
+        Every panel follows the same anatomy: <strong>a dynamic visual</strong>, <strong>the abstract formula</strong>,
+        <strong>that same formula with current values plugged in</strong>, and <strong>the outcome</strong>.
+        Drag the sliders, type in prompts, watch the math respond.
+      </p>
+    </section>
+
+    <section class="gallery__grid">
+
+      <div class="gallery__section-header">
+        <span>Mechanics</span>
+        <span class="gallery__section-header__count">12 panels</span>
+      </div>
+
+      <a class="gallery__card" href="attention.html">
+        <span class="gallery__card-tag">Transformer · Chapter 1</span>
+        <h3 class="gallery__card-title">Self-Attention</h3>
+        <p class="gallery__card-desc">Watch query–key dot products produce attention weights, then weighted sums of values.</p>
+        <div class="gallery__card-formula">softmax(QKᵀ / √d_k) V</div>
+      </a>
+
+      <a class="gallery__card" href="softmax-temperature.html">
+        <span class="gallery__card-tag">Decoding · Chapter 9</span>
+        <h3 class="gallery__card-title">Softmax &amp; Temperature</h3>
+        <p class="gallery__card-desc">See how raising the temperature flattens the distribution and lowers it sharpens.</p>
+        <div class="gallery__card-formula">p_i = exp(z_i / T) / Σ exp(z_j / T)</div>
+      </a>
+
+      <a class="gallery__card" href="gradient-descent.html">
+        <span class="gallery__card-tag">Training · Chapter 7</span>
+        <h3 class="gallery__card-title">Gradient Descent</h3>
+        <p class="gallery__card-desc">Step through 2-D loss landscapes and observe how learning rate controls convergence.</p>
+        <div class="gallery__card-formula">θ ← θ − η ∇L(θ)</div>
+      </a>
+
+      <a class="gallery__card" href="tokenization-bpe.html">
+        <span class="gallery__card-tag">Tokenization · Chapter 6</span>
+        <h3 class="gallery__card-title">BPE Tokenization</h3>
+        <p class="gallery__card-desc">Run byte-pair encoding live: see merge rules consume your text into tokens.</p>
+        <div class="gallery__card-formula">merge(a, b) where (a,b) = argmax count</div>
+      </a>
+
+      <a class="gallery__card" href="embedding-similarity.html">
+        <span class="gallery__card-tag">Embeddings · Chapter 11</span>
+        <h3 class="gallery__card-title">Embedding Similarity</h3>
+        <p class="gallery__card-desc">Project word vectors to 2-D and pick pairs to compare via cosine similarity.</p>
+        <div class="gallery__card-formula">cos(θ) = a·b / (‖a‖‖b‖)</div>
+      </a>
+
+      <a class="gallery__card" href="rag-pipeline.html">
+        <span class="gallery__card-tag">RAG · Chapter 11</span>
+        <h3 class="gallery__card-title">RAG Pipeline</h3>
+        <p class="gallery__card-desc">Type a query and watch retrieval-augmented generation pull top-k context chunks.</p>
+        <div class="gallery__card-formula">score(q, d) = cos(q, d)</div>
+      </a>
+
+      <a class="gallery__card" href="top-p-sampling.html">
+        <span class="gallery__card-tag">Decoding · Chapter 9</span>
+        <h3 class="gallery__card-title">Top-p (Nucleus) Sampling</h3>
+        <p class="gallery__card-desc">Choose the smallest set of tokens whose cumulative probability exceeds p.</p>
+        <div class="gallery__card-formula">V_p = argmin_V Σ p_i ≥ p</div>
+      </a>
+
+      <a class="gallery__card" href="layer-norm.html">
+        <span class="gallery__card-tag">Architecture · Chapter 2</span>
+        <h3 class="gallery__card-title">Layer Normalization</h3>
+        <p class="gallery__card-desc">Normalize a noisy activation distribution to unit mean and variance.</p>
+        <div class="gallery__card-formula">γ (x − μ) / √(σ² + ε) + β</div>
+      </a>
+
+      <a class="gallery__card" href="lora.html">
+        <span class="gallery__card-tag">Fine-tuning · Chapter 8</span>
+        <h3 class="gallery__card-title">LoRA Decomposition</h3>
+        <p class="gallery__card-desc">Compare full fine-tune parameter count vs LoRA rank-r adapters.</p>
+        <div class="gallery__card-formula">h = W₀x + α·BA·x</div>
+      </a>
+
+      <a class="gallery__card" href="positional-encoding.html">
+        <span class="gallery__card-tag">Architecture · Chapter 1</span>
+        <h3 class="gallery__card-title">Positional Encoding</h3>
+        <p class="gallery__card-desc">Visualize sinusoidal position vectors and their wavelength structure.</p>
+        <div class="gallery__card-formula">PE(pos, 2i) = sin(pos / 10000^(2i/d))</div>
+      </a>
+
+      <a class="gallery__card" href="moe-routing.html">
+        <span class="gallery__card-tag">Architecture · Chapter 3</span>
+        <h3 class="gallery__card-title">MoE Routing</h3>
+        <p class="gallery__card-desc">See a router pick the top-k experts for each input token.</p>
+        <div class="gallery__card-formula">G(x) = TopK(softmax(W_g x))</div>
+      </a>
+
+      <a class="gallery__card" href="beam-search.html">
+        <span class="gallery__card-tag">Decoding · Chapter 9</span>
+        <h3 class="gallery__card-title">Greedy vs Beam Search</h3>
+        <p class="gallery__card-desc">Walk a token tree and watch beam width change which sequence wins.</p>
+        <div class="gallery__card-formula">score(y) = Σ log p(y_i | y_&lt;i)</div>
+      </a>
+
+      <div class="gallery__section-header">
+        <span>Operations</span>
+        <span class="gallery__section-header__count">6 panels</span>
+      </div>
+
+      <a class="gallery__card" href="generation-loop.html">
+        <span class="gallery__card-tag">Operations · Generation</span>
+        <h3 class="gallery__card-title">Auto-regressive Generation</h3>
+        <p class="gallery__card-desc">Step through the fundamental loop: predict the next token, append, repeat — with the live top-5 distribution at every step.</p>
+        <div class="gallery__card-formula">y_t ~ softmax(f(x, y_&lt;t) / T)</div>
+      </a>
+
+      <a class="gallery__card" href="rating.html">
+        <span class="gallery__card-tag">Operations · Rating</span>
+        <h3 class="gallery__card-title">Rating Anything (1–10)</h3>
+        <p class="gallery__card-desc">Same operation for product reviews, opinions ("Newton's brilliance"), or divisive takes (pizza pineapple) — softmax over the 10 rating tokens.</p>
+        <div class="gallery__card-formula">r̂ = argmax p(r | prompt),  r ∈ {1..10}</div>
+      </a>
+
+      <a class="gallery__card" href="ranking.html">
+        <span class="gallery__card-tag">Operations · Ranking</span>
+        <h3 class="gallery__card-title">Pairwise Ranking</h3>
+        <p class="gallery__card-desc">Build a full ranking from "Which is better, A or B?" pairwise probabilities, aggregated into a win matrix.</p>
+        <div class="gallery__card-formula">rank(i) = Σ_{j≠i} P(i ≻ j)</div>
+      </a>
+
+      <a class="gallery__card" href="classification.html">
+        <span class="gallery__card-tag">Operations · Classification</span>
+        <h3 class="gallery__card-title">Classification (Constrained)</h3>
+        <p class="gallery__card-desc">Compare unconstrained generation vs class-only constrained decoding — the LLM as classifier.</p>
+        <div class="gallery__card-formula">ŷ = argmax_{c ∈ C} p(c | x)</div>
+      </a>
+
+      <a class="gallery__card" href="drawing.html">
+        <span class="gallery__card-tag">Operations · Drawing</span>
+        <h3 class="gallery__card-title">Drawing in ASCII</h3>
+        <p class="gallery__card-desc">Watch a cat (or tree, heart, house) drawn token-by-token, with the live top-3 candidate characters at each step.</p>
+        <div class="gallery__card-formula">y_t ~ p(· | prompt, y_&lt;t)</div>
+      </a>
+
+      <a class="gallery__card" href="math-reasoning.html">
+        <span class="gallery__card-tag">Operations · Reasoning</span>
+        <h3 class="gallery__card-title">Math Reasoning</h3>
+        <p class="gallery__card-desc">Compare greedy direct, Chain-of-Thought, and tool calls on the same math problem — and see which gets it right.</p>
+        <div class="gallery__card-formula">ŷ = argmax p(y | prompt, r_1..k)  (CoT)</div>
+      </a>
+
+    </section>
+  </main>
+
+  <script src="../assets/js/viz-base.js"></script>
+  <script>Viz.boot(() => {});</script>
+</body>
+</html>

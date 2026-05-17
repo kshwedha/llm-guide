@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAG Pipeline — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+  <style>
+    body{font-family:'Inter',var(--sans);}
+    .doc { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; font-size: 13px; line-height: 1.5;}
+    .doc--top { border-color: var(--accent); background: var(--accent-soft);}
+    .doc__bar { height: 4px; border-radius: 2px; background: var(--border); position: relative; margin-top: 6px;}
+    .doc__fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 2px;}
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">RAG · Chapter 11</span>
+      <h1 class="viz-page__title">RAG Pipeline</h1>
+      <p class="viz-page__subtitle">A toy retrieval-augmented generation flow. Type a query, watch cosine similarity rank documents, and see the actual scores plugged into the formula. The outcome is a synthesised answer over the top-k contexts.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control" style="flex:1; min-width: 320px;">
+        <label class="viz-control__label" for="query-input">Query</label>
+        <input id="query-input" type="text" value="how do I deploy an LLM with low latency?">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="k-slider">top-k <span class="viz-control__value" id="k-value">3</span></label>
+        <input id="k-slider" type="range" min="1" max="6" step="1" value="3">
+      </div>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · retrieval scores</div>
+        <div id="viz-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The scoring function</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">Right now · top-k scores</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome · synthesised answer</div>
+        <div id="output-pane" style="font-family: var(--sans); white-space: pre-wrap;"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    const CORPUS = [
+      { id: 1, title: 'vLLM continuous batching', text: 'vLLM uses paged attention and continuous batching to serve LLMs at high throughput on a single GPU. Latency is reduced by overlapping decode steps for many concurrent requests.' },
+      { id: 2, title: 'Quantization for fast inference', text: 'GPTQ and AWQ quantize weights to 4-bit so that small GPUs can run large models with low memory and lower latency, at a tiny quality cost.' },
+      { id: 3, title: 'Speculative decoding', text: 'Speculative decoding pairs a small draft model with the target model. The big model verifies the draft tokens, accelerating generation by 2–3 times for low-latency serving.' },
+      { id: 4, title: 'Embedding-based RAG', text: 'Retrieval-augmented generation grounds an LLM by retrieving documents from a vector store and inserting them into the prompt before answering.' },
+      { id: 5, title: 'Prompt caching', text: 'Anthropic and OpenAI both cache stable prompt prefixes so repeated calls reuse previous computation, slashing latency and cost.' },
+      { id: 6, title: 'Cooking sourdough bread', text: 'Sourdough relies on wild yeast and lactobacillus. Mix flour, water, salt, and starter, then bulk-ferment and bake.' },
+    ];
+
+    function tokens(text) {
+      return text.toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+    }
+    function bow(text, vocab) {
+      const ts = tokens(text);
+      const v = new Array(vocab.length).fill(0);
+      ts.forEach((t) => {
+        const i = vocab.indexOf(t);
+        if (i >= 0) v[i] += 1;
+      });
+      const norm = Math.sqrt(v.reduce((s, x) => s + x * x, 0)) || 1;
+      return v.map((x) => x / norm);
+    }
+    function cosine(a, b) {
+      return a.reduce((s, v, i) => s + v * b[i], 0);
+    }
+
+    function update() {
+      const query = document.getElementById('query-input').value;
+      const k = Number(document.getElementById('k-slider').value);
+      document.getElementById('k-value').textContent = k;
+
+      const allText = [query, ...CORPUS.map((d) => d.text + ' ' + d.title)].join(' ');
+      const vocab = Array.from(new Set(tokens(allText)));
+      const qv = bow(query, vocab);
+
+      const scored = CORPUS.map((d) => ({
+        ...d,
+        score: cosine(qv, bow(d.text + ' ' + d.title, vocab)),
+      })).sort((a, b) => b.score - a.score);
+
+      const top = scored.slice(0, k);
+      const max = Math.max(...scored.map((s) => s.score), 0.01);
+
+      const viz = document.getElementById('viz-pane');
+      viz.innerHTML = '';
+      scored.forEach((d, idx) => {
+        const div = document.createElement('div');
+        div.className = 'doc' + (idx < k ? ' doc--top' : '');
+        const head = document.createElement('div');
+        head.style.display = 'flex';
+        head.style.justifyContent = 'space-between';
+        head.style.alignItems = 'center';
+        const t = document.createElement('strong');
+        t.textContent = `[${d.id}] ${d.title}`;
+        const sc = document.createElement('span');
+        sc.style.fontFamily = 'JetBrains Mono';
+        sc.style.fontSize = '12px';
+        sc.style.color = idx < k ? 'var(--accent)' : 'var(--fg-muted)';
+        sc.textContent = `cos = ${d.score.toFixed(3)}` + (idx < k ? `  · top-${idx + 1}` : '');
+        head.appendChild(t); head.appendChild(sc);
+        const txt = document.createElement('div');
+        txt.style.color = 'var(--fg-muted)';
+        txt.style.marginTop = '4px';
+        txt.textContent = d.text;
+        const bar = document.createElement('div');
+        bar.className = 'doc__bar';
+        const fill = document.createElement('div');
+        fill.className = 'doc__fill';
+        fill.style.width = `${Math.max(0, d.score) / max * 100}%`;
+        bar.appendChild(fill);
+
+        div.appendChild(head); div.appendChild(txt); div.appendChild(bar);
+        viz.appendChild(div);
+      });
+
+      const subRows = top.map((d) => `\\text{cos}(q, d_{${d.id}}) &= ${Viz.fmt(d.score, 3)} \\quad\\text{[${d.title.slice(0, 28)}]}`).join(' \\\\\n');
+      Viz.renderEquations(
+        `\\text{score}(q, d) = \\cos(\\mathbf{e}_q, \\mathbf{e}_d) \\\\[2pt] \\text{Answer} = \\text{LLM}\\!\\left(q,\\,\\text{top-}k\\right)`,
+        `\\begin{aligned} ${subRows || '\\text{no documents}'} \\\\ k &= ${k} \\end{aligned}`
+      );
+
+      const cited = top.map((d) => `[${d.id}]`).join(' ');
+      const synthesis = top.length === 0
+        ? 'No relevant context retrieved.'
+        : `Based on retrieved sources ${cited}:\n\n${top.map((d) => '• ' + d.text).join('\n')}\n\n→ The answer combines techniques from the retrieved sources, grounding the response in evidence rather than parametric memory alone.`;
+      document.getElementById('output-pane').textContent = synthesis;
+    }
+
+    document.getElementById('query-input').addEventListener('input', Viz.debounce(update, 200));
+    document.getElementById('k-slider').addEventListener('input', update);
+
+    update();
+  });
+  </script>
+</body>
+</html>

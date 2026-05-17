@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Softmax &amp; Temperature — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+  
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Decoding · Chapter 9</span>
+      <h1 class="viz-page__title">Softmax &amp; Temperature</h1>
+      <p class="viz-page__subtitle">Adjust temperature to watch a fixed set of logits become peaked (T → 0) or uniform (T → ∞). The substituted equation shows the live arithmetic; the outcome samples a token from the current distribution.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control">
+        <label class="viz-control__label" for="temp-slider">Temperature T <span class="viz-control__value" id="temp-value">1.0</span></label>
+        <input id="temp-slider" type="range" min="0.05" max="3" step="0.01" value="1">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="logits-input">Logits (comma-sep)</label>
+        <input id="logits-input" type="text" value="3.0, 2.5, 2.0, 1.5, 1.0, 0.2">
+      </div>
+      <button id="sample-btn" class="viz-btn" type="button">Sample 1 token</button>
+      <button id="batch-btn" class="viz-btn viz-btn--secondary" type="button">Sample 1000×</button>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · probability distribution</div>
+        <svg id="viz-pane" viewBox="0 0 720 360" role="img"></svg>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The formula</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">Right now · with current logits + T</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    const TOKENS = ['cat', 'dog', 'fish', 'tree', 'sky', 'rune'];
+    const state = { T: 1.0, logits: [3.0, 2.5, 2.0, 1.5, 1.0, 0.2], lastSampled: null, batchCounts: null };
+
+    function parseLogits(s) {
+      const arr = s.split(',').map((x) => Number(x.trim())).filter((x) => Number.isFinite(x));
+      return arr.length > 0 ? arr : state.logits;
+    }
+
+    function drawBars(probs) {
+      const svg = document.getElementById('viz-pane');
+      svg.innerHTML = '';
+      const W = 720, H = 360, padL = 60, padR = 30, padT = 30, padB = 60;
+      const N = probs.length;
+      const barW = (W - padL - padR) / N;
+      const accent = Viz.color('--accent');
+      const muted = Viz.color('--fg-muted');
+
+      /* Y axis */
+      const ticks = [0, 0.25, 0.5, 0.75, 1.0];
+      ticks.forEach((t) => {
+        const y = padT + (H - padT - padB) * (1 - t);
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', padL); line.setAttribute('x2', W - padR);
+        line.setAttribute('y1', y); line.setAttribute('y2', y);
+        line.setAttribute('class', 'grid'); line.setAttribute('stroke-dasharray', '2 2');
+        line.setAttribute('stroke', muted); line.setAttribute('stroke-opacity', 0.3);
+        svg.appendChild(line);
+        const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lbl.setAttribute('x', padL - 8); lbl.setAttribute('y', y + 4);
+        lbl.setAttribute('text-anchor', 'end'); lbl.setAttribute('class', 'label');
+        lbl.setAttribute('font-family', 'JetBrains Mono'); lbl.textContent = t.toFixed(2);
+        svg.appendChild(lbl);
+      });
+
+      probs.forEach((p, i) => {
+        const x = padL + i * barW + 6;
+        const w = barW - 12;
+        const h = (H - padT - padB) * p;
+        const y = (H - padB) - h;
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', x); rect.setAttribute('y', y);
+        rect.setAttribute('width', w); rect.setAttribute('height', h);
+        rect.setAttribute('fill', accent); rect.setAttribute('rx', 4);
+        rect.setAttribute('opacity', state.lastSampled === i ? 1 : 0.85);
+        svg.appendChild(rect);
+
+        const lab = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lab.setAttribute('x', padL + i * barW + barW / 2);
+        lab.setAttribute('y', H - padB + 18);
+        lab.setAttribute('text-anchor', 'middle');
+        lab.setAttribute('class', 'label'); lab.textContent = TOKENS[i] || `t${i}`;
+        svg.appendChild(lab);
+
+        const val = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        val.setAttribute('x', padL + i * barW + barW / 2);
+        val.setAttribute('y', y - 6);
+        val.setAttribute('text-anchor', 'middle');
+        val.setAttribute('font-family', 'JetBrains Mono');
+        val.setAttribute('font-size', 11);
+        val.setAttribute('fill', accent); val.textContent = p.toFixed(3);
+        svg.appendChild(val);
+
+        if (state.batchCounts) {
+          const count = state.batchCounts[i] || 0;
+          const total = state.batchCounts.reduce((a, b) => a + b, 0);
+          const empPct = total ? count / total : 0;
+          const eh = (H - padT - padB) * empPct;
+          const ey = (H - padB) - eh;
+          const empBar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          empBar.setAttribute('x', x + w * 0.4);
+          empBar.setAttribute('y', ey);
+          empBar.setAttribute('width', w * 0.5);
+          empBar.setAttribute('height', eh);
+          empBar.setAttribute('fill', Viz.color('--c-3'));
+          empBar.setAttribute('opacity', 0.6); empBar.setAttribute('rx', 3);
+          svg.appendChild(empBar);
+        }
+      });
+
+      /* legend */
+      const legend = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      legend.setAttribute('x', W - padR);
+      legend.setAttribute('y', 18);
+      legend.setAttribute('text-anchor', 'end');
+      legend.setAttribute('class', 'label');
+      legend.textContent = state.batchCounts ? '■ theoretical p   ■ empirical (1000 samples)' : '■ probability p';
+      svg.appendChild(legend);
+    }
+
+    function sampleOne(probs) {
+      const r = Math.random();
+      const cum = Viz.cumsum(probs);
+      for (let i = 0; i < cum.length; i++) if (r < cum[i]) return i;
+      return probs.length - 1;
+    }
+
+    function update(opts = {}) {
+      const T = Number(document.getElementById('temp-slider').value);
+      state.T = T;
+      document.getElementById('temp-value').textContent = T.toFixed(2);
+      state.logits = parseLogits(document.getElementById('logits-input').value);
+      const probs = Viz.softmax(state.logits, T);
+
+      if (opts.sample) {
+        state.lastSampled = sampleOne(probs);
+        state.batchCounts = null;
+      } else if (opts.batch) {
+        const counts = new Array(probs.length).fill(0);
+        for (let n = 0; n < 1000; n++) counts[sampleOne(probs)]++;
+        state.batchCounts = counts;
+        state.lastSampled = null;
+      } else if (opts.reset) {
+        state.lastSampled = null;
+        state.batchCounts = null;
+      }
+
+      drawBars(probs);
+
+      const exps = state.logits.map((z) => Math.exp(z / T));
+      const sumExp = exps.reduce((a, b) => a + b, 0);
+      Viz.renderEquations(
+        `p_i = \\dfrac{e^{z_i / T}}{\\sum_{j} e^{z_j / T}}`,
+        `\\begin{aligned}
+          e^{z/${T.toFixed(2)}} &= ${Viz.vec(exps, 2, 5)} \\\\
+          \\Sigma &= ${Viz.fmt(sumExp, 2)} \\\\
+          p &= ${Viz.vec(probs, 3, 5)}
+        \\end{aligned}`
+      );
+
+      const entropy = -probs.reduce((s, p) => s + (p > 0 ? p * Math.log2(p) : 0), 0);
+      const top = probs.indexOf(Math.max(...probs));
+      const rows = [
+        { label: 'logits', value: `[ ${state.logits.map((x) => Viz.fmt(x, 2)).join(', ')} ]` },
+        { label: 'probabilities', value: `[ ${probs.map((p) => Viz.fmt(p)).join(', ')} ]`, accent: true },
+        { label: 'entropy H(p)', value: `${entropy.toFixed(3)} bits` },
+        { label: 'argmax token', value: `${TOKENS[top]} (p=${probs[top].toFixed(3)})`, accent: true },
+      ];
+      if (state.lastSampled !== null) {
+        rows.push({ label: 'sampled token', value: `${TOKENS[state.lastSampled]} (p=${probs[state.lastSampled].toFixed(3)})`, accent: true });
+      }
+      if (state.batchCounts) {
+        rows.push({ label: 'batch · 1000 samples', value: state.batchCounts.map((c, i) => `${TOKENS[i]}=${c}`).join('  ') });
+      }
+      Viz.setOutput(document.getElementById('output-pane'), rows);
+    }
+
+    document.getElementById('temp-slider').addEventListener('input', () => update({ reset: true }));
+    document.getElementById('logits-input').addEventListener('input', Viz.debounce(() => update({ reset: true }), 200));
+    document.getElementById('sample-btn').addEventListener('click', () => update({ sample: true }));
+    document.getElementById('batch-btn').addEventListener('click', () => update({ batch: true }));
+    window.addEventListener('themechange', () => update());
+
+    update();
+  });
+  </script>
+</body>
+</html>

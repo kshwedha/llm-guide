@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Rating with an LLM — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Operations · Rating</span>
+      <h1 class="viz-page__title">Rating Anything (1–10)</h1>
+      <p class="viz-page__subtitle">A "rating" is just constrained next-token prediction — and it works for <em>anything</em> you can phrase as a 1–10 question. Whether it's a product review, an opinion ("rate Newton's brilliance"), a difficulty estimate, or a divisive food take — we extract the logits over the tokens <code>"1", "2", … "10"</code> at the answer position, softmax them, and either argmax or take the expected value. Same operation, very different distributions.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control">
+        <label class="viz-control__label" for="review-select">Prompt</label>
+        <select id="review-select">
+          <optgroup label="Product reviews · sentiment-style">
+            <option value="0">"Rate: Absolutely loved it. Best purchase of the year."</option>
+            <option value="1">"Rate: It works fine, nothing remarkable."</option>
+            <option value="2">"Rate: Disappointed. Broke after two days."</option>
+            <option value="3">"Rate: Mixed feelings — great features, terrible support."</option>
+            <option value="4">"Rate: Pretty good, would buy again."</option>
+          </optgroup>
+          <optgroup label="Opinion / entity / concept ratings">
+            <option value="5">"How would you rate Newton's brilliance on a 1–10 scale?"</option>
+            <option value="6">"Rate the Mona Lisa's beauty on a 1–10 scale."</option>
+            <option value="7">"Rate the Roman Empire's influence on history (1–10)."</option>
+            <option value="8">"Rate the difficulty of learning Rust (1–10)."</option>
+            <option value="9">"How would you rate JavaScript's design quality (1–10)?"</option>
+            <option value="10">"Rate the deliciousness of pineapple on pizza (1–10)."</option>
+          </optgroup>
+        </select>
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="method-select">Aggregation</label>
+        <select id="method-select">
+          <option value="argmax">argmax — most likely rating</option>
+          <option value="expected">expected value — Σ r·p(r)</option>
+        </select>
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="T-slider">Temperature T <span class="viz-control__value" id="T-value">1.0</span></label>
+        <input id="T-slider" type="range" min="0.1" max="3" step="0.1" value="1.0">
+      </div>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · P(r) over the 10 rating tokens</div>
+        <svg id="viz-pane" viewBox="0 0 720 380" role="img"></svg>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The formula</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">Right now · scoring the selected review</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome · final rating</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    /* Each prompt has a hand-shaped logit vector over tokens "1".."10".
+       The shape illustrates how the model's *prior* over rating tokens shifts
+       depending on what is being rated:
+         - Strong consensus (e.g. Newton, Roman Empire) → sharp peak at high end
+         - Universal acclaim (Mona Lisa) → almost as sharp
+         - Subjective opinion (JS design)  → broad, mid-range
+         - Divisive (pineapple on pizza)  → bimodal (peaks at BOTH ends)
+       The page softmaxes these with the chosen temperature so Pane 1 + Pane 3
+       update live as T changes. The PROMPT changes only the conditioning, not
+       the operation — same softmax-over-rating-tokens for every single one. */
+    const PROMPTS = [
+      /* ── 0–4: product reviews (sentiment-driven) ── */
+      { text: "Absolutely loved it. Best purchase of the year.",
+        kind: "review",
+        logits: [-3.0, -2.5, -2.0, -1.5, -0.5,  0.0,  1.0,  2.0,  3.0,  3.6] },
+      { text: "It works fine, nothing remarkable.",
+        kind: "review",
+        logits: [-1.5, -1.0, -0.4,  0.4,  1.4,  2.0,  1.8,  1.0,  0.0, -1.0] },
+      { text: "Disappointed. Broke after two days.",
+        kind: "review",
+        logits: [ 3.4,  2.6,  1.8,  0.5, -0.2, -1.0, -1.6, -2.2, -2.8, -3.2] },
+      { text: "Mixed feelings: great features, terrible support.",
+        kind: "review",
+        logits: [-0.8,  0.0,  0.6,  1.2,  1.8,  2.0,  1.6,  1.2,  0.4, -0.6] },
+      { text: "Pretty good, would buy again.",
+        kind: "review",
+        logits: [-2.0, -1.5, -1.0, -0.5,  0.4,  1.0,  1.6,  2.4,  2.0,  0.6] },
+
+      /* ── 5–10: opinion / entity / concept ratings ── */
+      { text: "How would you rate Newton's brilliance on a 1–10 scale?",
+        kind: "opinion",
+        /* Strong cultural consensus → tall peak at 10, decent prob at 9 */
+        logits: [-3.8, -3.3, -2.8, -2.3, -1.5, -0.5,  0.5,  1.6,  2.8,  3.9] },
+      { text: "Rate the Mona Lisa's beauty on a 1–10 scale.",
+        kind: "opinion",
+        /* Famous but more subjective → peak at 9, close runner-up at 10 */
+        logits: [-3.0, -2.6, -2.1, -1.6, -0.6,  0.4,  1.4,  2.4,  3.5,  3.2] },
+      { text: "Rate the Roman Empire's influence on history (1–10).",
+        kind: "opinion",
+        /* Almost universally cited as massive → very sharp at 10 */
+        logits: [-4.0, -3.6, -3.0, -2.4, -1.6, -0.8,  0.4,  1.6,  2.8,  4.0] },
+      { text: "Rate the difficulty of learning Rust (1–10).",
+        kind: "opinion",
+        /* Reputation as hard but not impossible → peak at 8 */
+        logits: [-2.5, -2.0, -1.5, -1.0, -0.2,  0.8,  1.8,  3.0,  2.4,  1.0] },
+      { text: "How would you rate JavaScript's design quality (1–10)?",
+        kind: "opinion",
+        /* Famously controversial → broad, mid-range, high entropy */
+        logits: [-1.0, -0.4,  0.2,  0.8,  1.6,  2.0,  1.6,  0.8,  0.0, -1.0] },
+      { text: "Rate the deliciousness of pineapple on pizza (1–10).",
+        kind: "opinion",
+        /* Genuinely divisive → BIMODAL: mass at both 1 and 10, dip in the middle */
+        logits: [ 2.6,  1.4,  0.0, -0.8, -1.0, -0.6, -0.2,  0.6,  1.6,  2.4] },
+    ];
+
+    function update() {
+      const idx = Number(document.getElementById('review-select').value);
+      const T = Number(document.getElementById('T-slider').value);
+      const method = document.getElementById('method-select').value;
+      document.getElementById('T-value').textContent = T.toFixed(1);
+
+      const prompt = PROMPTS[idx];
+      const probs = Viz.softmax(prompt.logits, T);
+      const argmax = probs.indexOf(Math.max(...probs)) + 1;
+      const expected = probs.reduce((s, p, i) => s + (i + 1) * p, 0);
+      const final = method === 'argmax' ? argmax : expected;
+
+      /* ── Pane 1 — bar chart over tokens "1".."10" ── */
+      const svg = document.getElementById('viz-pane');
+      svg.innerHTML = '';
+      const W = 720, H = 380;
+      const padL = 60, padR = 30, padT = 50, padB = 60;
+      const barW = (W - padL - padR) / 10;
+      const accent = Viz.color('--accent');
+      const muted = Viz.color('--fg-muted');
+      const c3 = Viz.color('--c-3');
+
+      /* Prompt text — the label adapts so it's clear this is the SAME
+         operation regardless of what's being rated. */
+      const rev = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      rev.setAttribute('x', padL); rev.setAttribute('y', 26);
+      rev.setAttribute('font-family', 'Inter'); rev.setAttribute('font-size', 13);
+      rev.setAttribute('fill', Viz.color('--fg'));
+      const promptLabel = prompt.kind === 'review' ? 'Review' : 'Prompt';
+      rev.textContent = `${promptLabel}: "${prompt.text}"`;
+      svg.appendChild(rev);
+
+      const maxP = Math.max(...probs);
+      const yScale = (H - padT - padB) / Math.max(0.001, maxP);
+
+      probs.forEach((p, i) => {
+        const x = padL + i * barW + 4;
+        const w = barW - 8;
+        const h = p * yScale;
+        const isPick = method === 'argmax' ? (i + 1 === argmax) : (i + 1 === Math.round(expected));
+
+        const bar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        bar.setAttribute('x', x);
+        bar.setAttribute('y', H - padB - h);
+        bar.setAttribute('width', w);
+        bar.setAttribute('height', h);
+        bar.setAttribute('rx', 4);
+        bar.setAttribute('fill', isPick ? accent : Viz.color('--border-strong'));
+        bar.setAttribute('opacity', isPick ? 1 : 0.7);
+        svg.appendChild(bar);
+
+        const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lbl.setAttribute('x', x + w / 2); lbl.setAttribute('y', H - padB + 18);
+        lbl.setAttribute('text-anchor', 'middle');
+        lbl.setAttribute('font-size', 14); lbl.setAttribute('font-family', 'JetBrains Mono');
+        lbl.setAttribute('font-weight', isPick ? 700 : 500);
+        lbl.setAttribute('fill', isPick ? accent : Viz.color('--fg'));
+        lbl.textContent = i + 1;
+        svg.appendChild(lbl);
+
+        const pTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        pTxt.setAttribute('x', x + w / 2); pTxt.setAttribute('y', H - padB - h - 6);
+        pTxt.setAttribute('text-anchor', 'middle');
+        pTxt.setAttribute('font-size', 11); pTxt.setAttribute('fill', muted);
+        pTxt.textContent = p.toFixed(2);
+        svg.appendChild(pTxt);
+      });
+
+      /* Expected-value line */
+      if (method === 'expected') {
+        const xLine = padL + (expected - 0.5) * barW;
+        const ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        ln.setAttribute('x1', xLine); ln.setAttribute('y1', padT);
+        ln.setAttribute('x2', xLine); ln.setAttribute('y2', H - padB);
+        ln.setAttribute('stroke', c3); ln.setAttribute('stroke-width', 2.5);
+        ln.setAttribute('stroke-dasharray', '4 3');
+        svg.appendChild(ln);
+
+        const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lbl.setAttribute('x', xLine + 6); lbl.setAttribute('y', padT + 14);
+        lbl.setAttribute('font-size', 12); lbl.setAttribute('fill', c3);
+        lbl.setAttribute('font-weight', 700);
+        lbl.textContent = `E[r] = ${expected.toFixed(2)}`;
+        svg.appendChild(lbl);
+      }
+
+      /* ── Equations ── */
+      const top3 = probs.map((p, i) => ({ r: i + 1, p }))
+                        .sort((a, b) => b.p - a.p).slice(0, 3);
+      const top3Latex = top3.map((t) => `p(${t.r}) = ${t.p.toFixed(3)}`).join(',\\;\\;');
+      Viz.renderEquations(
+        method === 'argmax'
+          ? `\\hat r = \\arg\\max_{r \\in \\{1,\\ldots,10\\}}\\, p(r \\mid \\text{prompt})\\\\[2pt] p(r) = \\dfrac{e^{z_r / T}}{\\sum_{r'} e^{z_{r'} / T}}`
+          : `\\hat r = \\sum_{r=1}^{10} r \\cdot p(r \\mid \\text{prompt})\\\\[2pt] p(r) = \\dfrac{e^{z_r / T}}{\\sum_{r'} e^{z_{r'} / T}}`,
+        method === 'argmax'
+          ? `\\begin{aligned} T &= ${T.toFixed(2)} \\\\ \\text{top-3} &: ${top3Latex} \\\\ \\arg\\max &: r = ${argmax} \\end{aligned}`
+          : `\\begin{aligned} T &= ${T.toFixed(2)} \\\\ \\text{top-3} &: ${top3Latex} \\\\ \\sum r\\cdot p(r) &= ${expected.toFixed(2)} \\end{aligned}`
+      );
+
+      /* ── Outcome ── */
+      const entropy = -probs.reduce((s, p) => s + (p > 0 ? p * Math.log2(p) : 0), 0);
+      Viz.setOutput(document.getElementById('output-pane'), [
+        { label: 'rating (argmax)', value: argmax + ' / 10', accent: method === 'argmax' },
+        { label: 'rating (E[r])',   value: expected.toFixed(2) + ' / 10', accent: method === 'expected' },
+        { label: 'top probability', value: Math.max(...probs).toFixed(3) },
+        { label: 'entropy',         value: entropy.toFixed(2) + ' bits' },
+        { label: 'final score',     value: typeof final === 'number' ? final.toFixed(2) : final, accent: true },
+      ]);
+    }
+
+    ['review-select', 'method-select', 'T-slider'].forEach((id) =>
+      document.getElementById(id).addEventListener('input', update));
+    window.addEventListener('themechange', update);
+    update();
+  });
+  </script>
+</body>
+</html>

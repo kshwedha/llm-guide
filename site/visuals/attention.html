@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Self-Attention — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+  
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Transformer · Chapter 1</span>
+      <h1 class="viz-page__title">Self-Attention</h1>
+      <p class="viz-page__subtitle">A toy 4-token sequence with learnable Q/K/V matrices. Watch how query–key dot products produce attention weights, then weighted sums of values. Inspect any query row to see the live arithmetic.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control">
+        <label class="viz-control__label" for="seq-select">Sequence</label>
+        <select id="seq-select">
+          <option value="0">"the cat sat down"</option>
+          <option value="1">"a dog ran fast"</option>
+          <option value="2">"music makes me happy"</option>
+        </select>
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="dk-slider">d_k (key dim) <span class="viz-control__value" id="dk-value">4</span></label>
+        <input id="dk-slider" type="range" min="1" max="16" step="1" value="4">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="row-slider">Inspect query row <span class="viz-control__value" id="row-value">0</span></label>
+        <input id="row-slider" type="range" min="0" max="3" step="1" value="0">
+      </div>
+      <button id="reseed" class="viz-btn viz-btn--secondary" type="button">Reseed weights</button>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · attention heatmap</div>
+        <svg id="viz-pane" viewBox="0 0 700 380" role="img" aria-label="Attention heatmap"></svg>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The formula</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">Right now · for the selected query</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    const SEQUENCES = [
+      ['the', 'cat', 'sat', 'down'],
+      ['a', 'dog', 'ran', 'fast'],
+      ['music', 'makes', 'me', 'happy'],
+    ];
+
+    const state = {
+      seqIdx: 0,
+      dk: 4,
+      row: 0,
+      seed: 1,
+    };
+
+    /* Generate small embedding/Q/K/V matrices deterministically. */
+    function buildMatrices() {
+      const rng = Viz.rng(state.seed);
+      const tokens = SEQUENCES[state.seqIdx];
+      const N = tokens.length;
+      const d = 8;
+      const dk = state.dk;
+      const X = Array.from({ length: N }, () => Array.from({ length: d }, () => rng() * 2 - 1));
+      const Wq = Array.from({ length: d }, () => Array.from({ length: dk }, () => rng() * 2 - 1));
+      const Wk = Array.from({ length: d }, () => Array.from({ length: dk }, () => rng() * 2 - 1));
+      const Wv = Array.from({ length: d }, () => Array.from({ length: dk }, () => rng() * 2 - 1));
+      const matMul = (A, B) => A.map((row) => B[0].map((_, j) =>
+        row.reduce((s, _v, k) => s + row[k] * B[k][j], 0)));
+      const Q = matMul(X, Wq);
+      const K = matMul(X, Wk);
+      const V = matMul(X, Wv);
+      const scale = Math.sqrt(dk);
+      const scores = Q.map((q) => K.map((k) => q.reduce((s, qi, i) => s + qi * k[i], 0) / scale));
+      const A = scores.map((row) => Viz.softmax(row));
+      const out = A.map((row) => V[0].map((_, j) => row.reduce((s, ai, i) => s + ai * V[i][j], 0)));
+      return { tokens, Q, K, V, scores, A, out };
+    }
+
+    function drawHeatmap(M, tokens) {
+      const svg = document.getElementById('viz-pane');
+      svg.innerHTML = '';
+      const N = tokens.length;
+      const W = 700, H = 380;
+      const padL = 80, padT = 60, padR = 20, padB = 30;
+      const cellW = (W - padL - padR) / N;
+      const cellH = (H - padT - padB) / N;
+
+      const accentRgb = Viz.color('--accent') || '#4f46e5';
+      const bg = Viz.color('--bg-elev') || '#fff';
+
+      /* Row labels (queries) */
+      tokens.forEach((tok, i) => {
+        const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        t.setAttribute('x', padL - 8);
+        t.setAttribute('y', padT + cellH * (i + 0.6));
+        t.setAttribute('text-anchor', 'end');
+        t.setAttribute('class', 'label');
+        t.textContent = tok;
+        svg.appendChild(t);
+      });
+      /* Column labels (keys) */
+      tokens.forEach((tok, j) => {
+        const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        t.setAttribute('x', padL + cellW * (j + 0.5));
+        t.setAttribute('y', padT - 10);
+        t.setAttribute('text-anchor', 'middle');
+        t.setAttribute('class', 'label');
+        t.textContent = tok;
+        svg.appendChild(t);
+      });
+      /* Axis titles */
+      const qt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      qt.setAttribute('x', 18); qt.setAttribute('y', padT + (H - padT - padB) / 2);
+      qt.setAttribute('class', 'label'); qt.setAttribute('font-weight', '700');
+      qt.setAttribute('transform', `rotate(-90 18 ${padT + (H - padT - padB) / 2})`);
+      qt.textContent = 'Query';
+      svg.appendChild(qt);
+      const kt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      kt.setAttribute('x', padL + (W - padL - padR) / 2);
+      kt.setAttribute('y', 22); kt.setAttribute('class', 'label');
+      kt.setAttribute('text-anchor', 'middle'); kt.setAttribute('font-weight', '700');
+      kt.textContent = 'Key';
+      svg.appendChild(kt);
+
+      /* Cells */
+      for (let i = 0; i < N; i++) {
+        for (let j = 0; j < N; j++) {
+          const v = M[i][j];
+          const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          rect.setAttribute('x', padL + j * cellW);
+          rect.setAttribute('y', padT + i * cellH);
+          rect.setAttribute('width', cellW - 2);
+          rect.setAttribute('height', cellH - 2);
+          rect.setAttribute('fill', accentRgb);
+          rect.setAttribute('fill-opacity', Math.max(0.05, v).toFixed(3));
+          rect.setAttribute('rx', 4);
+          if (i === state.row) {
+            rect.setAttribute('stroke', accentRgb);
+            rect.setAttribute('stroke-width', 2);
+          }
+          svg.appendChild(rect);
+
+          const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          txt.setAttribute('x', padL + cellW * (j + 0.5));
+          txt.setAttribute('y', padT + cellH * (i + 0.55));
+          txt.setAttribute('text-anchor', 'middle');
+          txt.setAttribute('font-family', 'JetBrains Mono');
+          txt.setAttribute('font-size', '11');
+          txt.setAttribute('fill', v > 0.5 ? bg : Viz.color('--fg'));
+          txt.textContent = v.toFixed(2);
+          svg.appendChild(txt);
+        }
+      }
+    }
+
+    function update() {
+      state.seqIdx = Number(document.getElementById('seq-select').value);
+      state.dk = Number(document.getElementById('dk-slider').value);
+      const tokens = SEQUENCES[state.seqIdx];
+      const rowSlider = document.getElementById('row-slider');
+      rowSlider.max = tokens.length - 1;
+      if (state.row > tokens.length - 1) state.row = tokens.length - 1;
+      rowSlider.value = state.row;
+      document.getElementById('row-value').textContent = state.row;
+      document.getElementById('dk-value').textContent = state.dk;
+
+      const { A, scores, out } = buildMatrices();
+      drawHeatmap(A, tokens);
+
+      const rawScaled = scores[state.row].map((s) => Viz.fmt(s));
+      const rowAttnLatex = A[state.row].map((s) => Viz.fmt(s));
+      const queryTok = `\\text{${tokens[state.row]}}`;
+
+      Viz.renderEquations(
+        `\\text{Attention}(Q,K,V) = \\text{softmax}\\!\\left(\\dfrac{QK^{\\!\\top}}{\\sqrt{d_k}}\\right)V`,
+        `\\begin{aligned}
+          \\dfrac{q_{${queryTok}}\\,K^{\\!\\top}}{\\sqrt{${state.dk}}} &= ${Viz.vec(scores[state.row], 2, 6)} \\\\
+          \\text{softmax}(\\cdot) &= ${Viz.vec(A[state.row], 3, 6)}
+        \\end{aligned}`
+      );
+
+      const rowScores = scores[state.row].map((s) => Viz.fmt(s));
+      const rowAttn = A[state.row].map((s) => Viz.fmt(s));
+      const rowOut = out[state.row].map((s) => Viz.fmt(s));
+      Viz.setOutput(document.getElementById('output-pane'), [
+        { label: `query token`, value: tokens[state.row], accent: true },
+        { label: `raw scores QKᵀ/√d_k`, value: `[ ${rowScores.join(', ')} ]` },
+        { label: `attention weights (softmax)`, value: `[ ${rowAttn.join(', ')} ]` },
+        { label: `output Σ aᵢ vᵢ`, value: `[ ${rowOut.slice(0, 4).join(', ')}${rowOut.length > 4 ? ', …' : ''} ]`, accent: true },
+        { label: `most-attended token`, value: tokens[A[state.row].indexOf(Math.max(...A[state.row]))], accent: true },
+      ]);
+    }
+
+    document.getElementById('seq-select').addEventListener('change', update);
+    document.getElementById('dk-slider').addEventListener('input', update);
+    document.getElementById('row-slider').addEventListener('input', (e) => {
+      state.row = Number(e.target.value); update();
+    });
+    document.getElementById('reseed').addEventListener('click', () => {
+      state.seed = Math.floor(Math.random() * 1e9); update();
+    });
+    window.addEventListener('themechange', update);
+
+    update();
+  });
+  </script>
+</body>
+</html>

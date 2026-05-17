@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pairwise Ranking — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Operations · Ranking</span>
+      <h1 class="viz-page__title">Pairwise Ranking</h1>
+      <p class="viz-page__subtitle">"Which is better, A or B?" is just two-token comparison: P("A") vs P("B"). Loop over every pair and aggregate wins to produce a full ranking. The substituted equation shows the live pairwise probability for the pair you select.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control">
+        <label class="viz-control__label" for="set-select">Item set</label>
+        <select id="set-select">
+          <option value="0">Frontier LLMs · best at coding</option>
+          <option value="1">Programming languages · most loved</option>
+          <option value="2">Cloud providers · best for AI inference</option>
+        </select>
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="a-select">Item A</label>
+        <select id="a-select"></select>
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="b-select">Item B</label>
+        <select id="b-select"></select>
+      </div>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · pairwise win matrix + final ranking</div>
+        <svg id="viz-pane" viewBox="0 0 720 380" role="img"></svg>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The formula</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">Right now · selected pair</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome · final order</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    const SETS = [
+      { question: 'Which model is better at coding?',
+        items: [
+          { name: 'Claude Opus 4',  s: 0.94 },
+          { name: 'GPT-4o',         s: 0.86 },
+          { name: 'Gemini 2 Pro',   s: 0.81 },
+          { name: 'Llama 3.1 405B', s: 0.74 },
+          { name: 'Mistral Large 2',s: 0.69 },
+        ] },
+      { question: 'Which language do developers love most?',
+        items: [
+          { name: 'Rust',       s: 0.88 },
+          { name: 'TypeScript', s: 0.83 },
+          { name: 'Python',     s: 0.80 },
+          { name: 'Go',         s: 0.74 },
+          { name: 'Java',       s: 0.62 },
+        ] },
+      { question: 'Which cloud is best for AI inference?',
+        items: [
+          { name: 'AWS Bedrock',     s: 0.84 },
+          { name: 'Azure OpenAI',    s: 0.82 },
+          { name: 'GCP Vertex AI',   s: 0.78 },
+          { name: 'Modal',           s: 0.73 },
+          { name: 'Together.ai',     s: 0.68 },
+        ] },
+    ];
+
+    function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+    /* P(A wins over B) given hidden true scores. The factor 8 makes the
+       probabilities decisive enough to be readable. */
+    function pAwinsB(a, b) { return sigmoid((a.s - b.s) * 8); }
+
+    function fillItemSelect(id, items) {
+      const sel = document.getElementById(id);
+      sel.innerHTML = '';
+      items.forEach((it, i) => {
+        const opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = it.name;
+        sel.appendChild(opt);
+      });
+    }
+
+    function update() {
+      const setIdx = Number(document.getElementById('set-select').value);
+      const set = SETS[setIdx];
+
+      /* Refresh A/B option lists when the item set changes */
+      const aSel = document.getElementById('a-select');
+      const bSel = document.getElementById('b-select');
+      if (aSel.options.length !== set.items.length) {
+        fillItemSelect('a-select', set.items);
+        fillItemSelect('b-select', set.items);
+        aSel.value = 0; bSel.value = 1;
+      }
+      let aIdx = Number(aSel.value), bIdx = Number(bSel.value);
+      if (aIdx === bIdx) { bIdx = (aIdx + 1) % set.items.length; bSel.value = bIdx; }
+
+      /* Win matrix and aggregated ranking */
+      const N = set.items.length;
+      const winMatrix = Array.from({ length: N }, () => Array(N).fill(0));
+      for (let i = 0; i < N; i++) {
+        for (let j = 0; j < N; j++) {
+          if (i === j) continue;
+          winMatrix[i][j] = pAwinsB(set.items[i], set.items[j]);
+        }
+      }
+      const winSums = winMatrix.map((row) => row.reduce((a, b) => a + b, 0));
+      const ranking = set.items.map((it, i) => ({ ...it, wins: winSums[i] }))
+                              .sort((a, b) => b.wins - a.wins);
+
+      /* ── Pane 1 — heatmap + ranked list ── */
+      const svg = document.getElementById('viz-pane');
+      svg.innerHTML = '';
+      const W = 720, H = 380;
+      const padT = 50, padL = 60;
+      const cellSize = 32;
+      const accent = Viz.color('--accent');
+      const muted = Viz.color('--fg-muted');
+
+      const q = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      q.setAttribute('x', padL); q.setAttribute('y', 26);
+      q.setAttribute('font-size', 13); q.setAttribute('fill', Viz.color('--fg'));
+      q.setAttribute('font-family', 'Inter');
+      q.textContent = `LLM is asked: "${set.question}"`;
+      svg.appendChild(q);
+
+      /* Win matrix (left side) */
+      const matrixSize = N * cellSize;
+      for (let i = 0; i < N; i++) {
+        for (let j = 0; j < N; j++) {
+          const x = padL + j * cellSize, y = padT + i * cellSize;
+          const v = winMatrix[i][j];
+          const isHL = (i === aIdx && j === bIdx) || (i === bIdx && j === aIdx);
+          const c = i === j ? Viz.color('--bg-soft') :
+                    `rgba(99, 102, 241, ${(v * 0.85).toFixed(2)})`;
+          const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          r.setAttribute('x', x); r.setAttribute('y', y);
+          r.setAttribute('width', cellSize - 1); r.setAttribute('height', cellSize - 1);
+          r.setAttribute('fill', c);
+          r.setAttribute('stroke', isHL ? Viz.color('--c-3') : 'none');
+          r.setAttribute('stroke-width', 2);
+          svg.appendChild(r);
+
+          if (i !== j) {
+            const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            t.setAttribute('x', x + cellSize / 2); t.setAttribute('y', y + cellSize / 2 + 4);
+            t.setAttribute('text-anchor', 'middle');
+            t.setAttribute('font-size', 10); t.setAttribute('font-family', 'JetBrains Mono');
+            t.setAttribute('fill', v > 0.5 ? '#fff' : Viz.color('--fg-muted'));
+            t.textContent = v.toFixed(2);
+            svg.appendChild(t);
+          }
+        }
+      }
+      /* Row labels */
+      set.items.forEach((it, i) => {
+        const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lbl.setAttribute('x', padL - 6); lbl.setAttribute('y', padT + i * cellSize + cellSize / 2 + 4);
+        lbl.setAttribute('text-anchor', 'end');
+        lbl.setAttribute('font-size', 11); lbl.setAttribute('fill', muted);
+        lbl.textContent = it.name;
+        svg.appendChild(lbl);
+      });
+      const matrixLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      matrixLbl.setAttribute('x', padL); matrixLbl.setAttribute('y', padT + matrixSize + 24);
+      matrixLbl.setAttribute('font-size', 11); matrixLbl.setAttribute('fill', muted);
+      matrixLbl.textContent = 'Pairwise win matrix · cell (i,j) = P(i ≻ j)';
+      svg.appendChild(matrixLbl);
+
+      /* Ranked list (right side) */
+      const rankX = padL + matrixSize + 60;
+      const rankTitle = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      rankTitle.setAttribute('x', rankX); rankTitle.setAttribute('y', padT - 10);
+      rankTitle.setAttribute('font-size', 12); rankTitle.setAttribute('font-weight', 700);
+      rankTitle.setAttribute('fill', Viz.color('--fg'));
+      rankTitle.textContent = 'Final ranking';
+      svg.appendChild(rankTitle);
+
+      ranking.forEach((it, k) => {
+        const y = padT + k * 36 + 16;
+        const w = it.wins / (N - 1) * 200;
+
+        const idx = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        idx.setAttribute('x', rankX); idx.setAttribute('y', y + 4);
+        idx.setAttribute('font-size', 13); idx.setAttribute('font-family', 'JetBrains Mono');
+        idx.setAttribute('font-weight', 700);
+        idx.setAttribute('fill', k === 0 ? Viz.color('--c-3') : Viz.color('--fg'));
+        idx.textContent = `#${k + 1}`;
+        svg.appendChild(idx);
+
+        const nm = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        nm.setAttribute('x', rankX + 30); nm.setAttribute('y', y + 4);
+        nm.setAttribute('font-size', 13);
+        nm.setAttribute('fill', Viz.color('--fg'));
+        nm.textContent = it.name;
+        svg.appendChild(nm);
+
+        const bar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        bar.setAttribute('x', rankX + 30); bar.setAttribute('y', y + 10);
+        bar.setAttribute('width', Math.max(2, w)); bar.setAttribute('height', 8);
+        bar.setAttribute('rx', 3);
+        bar.setAttribute('fill', accent);
+        bar.setAttribute('opacity', k === 0 ? 1 : 0.6);
+        svg.appendChild(bar);
+
+        const wins = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        wins.setAttribute('x', rankX + 30 + Math.max(2, w) + 8);
+        wins.setAttribute('y', y + 18);
+        wins.setAttribute('font-size', 11); wins.setAttribute('fill', muted);
+        wins.setAttribute('font-family', 'JetBrains Mono');
+        wins.textContent = `${it.wins.toFixed(2)} wins`;
+        svg.appendChild(wins);
+      });
+
+      /* ── Equations ── */
+      const A = set.items[aIdx], B = set.items[bIdx];
+      const pAB = pAwinsB(A, B);
+      Viz.renderEquations(
+        `P(A \\succ B) = P(\\text{"}A\\text{"} \\mid \\text{prompt})\\\\[2pt] \\text{rank}(i) = \\sum_{j \\ne i} P(i \\succ j)`,
+        `\\begin{aligned}
+          P(\\text{${A.name}} \\succ \\text{${B.name}}) &= ${pAB.toFixed(3)} \\\\
+          P(\\text{${B.name}} \\succ \\text{${A.name}}) &= ${(1 - pAB).toFixed(3)} \\\\
+          \\text{rank}(\\text{${A.name}}) &= ${winSums[aIdx].toFixed(2)} \\\\
+          \\text{rank}(\\text{${B.name}}) &= ${winSums[bIdx].toFixed(2)}
+        \\end{aligned}`
+      );
+
+      /* ── Outcome ── */
+      Viz.setOutput(document.getElementById('output-pane'),
+        ranking.map((it, k) => ({
+          label: `#${k + 1}`,
+          value: `${it.name}  (${it.wins.toFixed(2)} wins)`,
+          accent: k === 0,
+        }))
+      );
+    }
+
+    ['set-select', 'a-select', 'b-select'].forEach((id) =>
+      document.getElementById(id).addEventListener('input', update));
+    window.addEventListener('themechange', update);
+    update();
+  });
+  </script>
+</body>
+</html>

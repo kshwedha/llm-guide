@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LoRA Decomposition — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+  
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Fine-tuning · Chapter 8</span>
+      <h1 class="viz-page__title">LoRA: Low-Rank Adaptation</h1>
+      <p class="viz-page__subtitle">Instead of fine-tuning all of W (d × k parameters), LoRA freezes W and learns two small matrices A (r × k) and B (d × r). The substituted equation reveals the actual parameter counts at your chosen rank.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control">
+        <label class="viz-control__label" for="d-slider">d (output dim) <span class="viz-control__value" id="d-value">4096</span></label>
+        <input id="d-slider" type="range" min="64" max="16384" step="64" value="4096">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="k-slider">k (input dim) <span class="viz-control__value" id="k-value">4096</span></label>
+        <input id="k-slider" type="range" min="64" max="16384" step="64" value="4096">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="r-slider">r (LoRA rank) <span class="viz-control__value" id="r-value">8</span></label>
+        <input id="r-slider" type="range" min="1" max="256" step="1" value="8">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="layers-slider">Number of layers <span class="viz-control__value" id="layers-value">32</span></label>
+        <input id="layers-slider" type="range" min="1" max="120" step="1" value="32">
+      </div>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · matrix decomposition</div>
+        <svg id="viz-pane" viewBox="0 0 720 380" role="img"></svg>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The forward pass</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">Right now · parameter math</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome · savings</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    function fmtBig(n) {
+      if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+      if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(2) + 'k';
+      return String(n);
+    }
+
+    function update() {
+      const d = Number(document.getElementById('d-slider').value);
+      const k = Number(document.getElementById('k-slider').value);
+      const r = Number(document.getElementById('r-slider').value);
+      const layers = Number(document.getElementById('layers-slider').value);
+      document.getElementById('d-value').textContent = d.toLocaleString();
+      document.getElementById('k-value').textContent = k.toLocaleString();
+      document.getElementById('r-value').textContent = r;
+      document.getElementById('layers-value').textContent = layers;
+
+      const fullPerLayer = d * k;
+      const loraPerLayer = d * r + r * k;
+      const fullTotal = fullPerLayer * layers;
+      const loraTotal = loraPerLayer * layers;
+      const savingsPct = (1 - loraTotal / fullTotal) * 100;
+      const ratio = fullTotal / loraTotal;
+
+      /* Pane 1 — visualize areas */
+      const svg = document.getElementById('viz-pane');
+      svg.innerHTML = '';
+      const W = 720, H = 380;
+
+      const accent = Viz.color('--accent');
+      const c2 = Viz.color('--c-2');
+      const c3 = Viz.color('--c-3');
+      const muted = Viz.color('--fg-muted');
+
+      /* Reference cell size for d × k visualization */
+      const maxArea = 240 * 240;
+      const cellSide = Math.sqrt(maxArea);
+      const xLeft = 40, yTop = 60;
+
+      const fullRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      fullRect.setAttribute('x', xLeft);
+      fullRect.setAttribute('y', yTop);
+      fullRect.setAttribute('width', cellSide);
+      fullRect.setAttribute('height', cellSide);
+      fullRect.setAttribute('fill', muted); fullRect.setAttribute('opacity', 0.4);
+      fullRect.setAttribute('stroke', muted); fullRect.setAttribute('stroke-width', 1);
+      svg.appendChild(fullRect);
+      const lblW = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      lblW.setAttribute('x', xLeft + cellSide / 2); lblW.setAttribute('y', yTop - 10);
+      lblW.setAttribute('text-anchor', 'middle'); lblW.setAttribute('font-weight', 700);
+      lblW.setAttribute('fill', Viz.color('--fg')); lblW.textContent = `W₀  (frozen, ${d}×${k})`;
+      svg.appendChild(lblW);
+      const ftxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      ftxt.setAttribute('x', xLeft + cellSide / 2); ftxt.setAttribute('y', yTop + cellSide / 2 + 6);
+      ftxt.setAttribute('text-anchor', 'middle'); ftxt.setAttribute('font-family', 'JetBrains Mono');
+      ftxt.setAttribute('font-size', 14); ftxt.setAttribute('fill', muted);
+      ftxt.textContent = fmtBig(d * k) + ' params';
+      svg.appendChild(ftxt);
+
+      /* B (d × r) */
+      const bX = xLeft + cellSide + 60;
+      const bWidth = cellSide * (r / Math.max(d, k));
+      const bSide = cellSide;
+      const bRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      bRect.setAttribute('x', bX); bRect.setAttribute('y', yTop);
+      bRect.setAttribute('width', Math.max(8, bWidth));
+      bRect.setAttribute('height', bSide);
+      bRect.setAttribute('fill', accent);
+      bRect.setAttribute('rx', 2);
+      svg.appendChild(bRect);
+      const bLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      bLbl.setAttribute('x', bX + Math.max(8, bWidth) / 2);
+      bLbl.setAttribute('y', yTop - 10); bLbl.setAttribute('text-anchor', 'middle');
+      bLbl.setAttribute('font-weight', 700); bLbl.setAttribute('fill', accent);
+      bLbl.textContent = `B (${d}×${r})`;
+      svg.appendChild(bLbl);
+
+      /* A (r × k) */
+      const aX = bX + Math.max(8, bWidth) + 30;
+      const aHeight = cellSide * (r / Math.max(d, k));
+      const aRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      aRect.setAttribute('x', aX); aRect.setAttribute('y', yTop);
+      aRect.setAttribute('width', cellSide);
+      aRect.setAttribute('height', Math.max(8, aHeight));
+      aRect.setAttribute('fill', c3); aRect.setAttribute('rx', 2);
+      svg.appendChild(aRect);
+      const aLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      aLbl.setAttribute('x', aX + cellSide / 2); aLbl.setAttribute('y', yTop - 10);
+      aLbl.setAttribute('text-anchor', 'middle'); aLbl.setAttribute('font-weight', 700);
+      aLbl.setAttribute('fill', c3); aLbl.textContent = `A (${r}×${k})`;
+      svg.appendChild(aLbl);
+
+      /* Caption */
+      const cap = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      cap.setAttribute('x', W / 2); cap.setAttribute('y', H - 30);
+      cap.setAttribute('text-anchor', 'middle'); cap.setAttribute('font-size', 13);
+      cap.setAttribute('fill', muted);
+      cap.textContent = `LoRA trains only B + A → ${fmtBig(loraPerLayer)} params/layer (${(loraPerLayer / fullPerLayer * 100).toFixed(2)}% of full).`;
+      svg.appendChild(cap);
+
+      Viz.renderEquations(
+        `h = W_0 x + \\Delta W\\,x \\\\[2pt] \\Delta W = \\dfrac{\\alpha}{r} BA,\\; B\\in\\mathbb{R}^{d\\times r},\\, A\\in\\mathbb{R}^{r\\times k}`,
+        `\\begin{aligned}
+          W_0 &: ${state.d} \\times ${state.k} = ${fmtBig(fullPerLayer)} \\\\
+          B &: ${state.d} \\times ${state.r} = ${fmtBig(state.d * state.r)} \\\\
+          A &: ${state.r} \\times ${state.k} = ${fmtBig(state.r * state.k)} \\\\
+          \\text{LoRA} &= ${fmtBig(loraPerLayer)} \\;(${(loraPerLayer/fullPerLayer*100).toFixed(2)}\\%) \\\\
+          \\text{ratio} &= ${ratio.toFixed(0)}\\times \\text{ smaller}
+        \\end{aligned}`
+      );
+
+      Viz.setOutput(document.getElementById('output-pane'), [
+        { label: 'full FT params / layer', value: fmtBig(fullPerLayer) },
+        { label: 'LoRA params / layer',    value: fmtBig(loraPerLayer), accent: true },
+        { label: 'full FT params (model)', value: fmtBig(fullTotal) },
+        { label: 'LoRA params (model)',    value: fmtBig(loraTotal),    accent: true },
+        { label: 'savings',                value: `${savingsPct.toFixed(2)}%`, accent: true },
+        { label: 'reduction factor',       value: `${ratio.toFixed(0)}×` },
+        { label: 'memory @ fp16',          value: `${(loraTotal * 2 / 1e6).toFixed(1)} MB (LoRA) vs ${(fullTotal * 2 / 1e9).toFixed(1)} GB (full)` },
+      ]);
+    }
+
+    ['d', 'k', 'r', 'layers'].forEach((id) =>
+      document.getElementById(`${id}-slider`).addEventListener('input', update));
+    window.addEventListener('themechange', update);
+
+    update();
+  });
+  </script>
+</body>
+</html>

@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Top-p (Nucleus) Sampling — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+  
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Decoding · Chapter 9</span>
+      <h1 class="viz-page__title">Top-p (Nucleus) Sampling</h1>
+      <p class="viz-page__subtitle">Tokens are sorted by probability and a cumulative cutoff p is applied. The substituted equation shows the running cumulative sum and exactly where it crosses your threshold — that's where the nucleus closes.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control">
+        <label class="viz-control__label" for="p-slider">p (nucleus) <span class="viz-control__value" id="p-value">0.90</span></label>
+        <input id="p-slider" type="range" min="0.05" max="1" step="0.01" value="0.9">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="t-slider">Temperature T <span class="viz-control__value" id="t-value">1.00</span></label>
+        <input id="t-slider" type="range" min="0.1" max="2.5" step="0.01" value="1">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="dist-select">Distribution shape</label>
+        <select id="dist-select">
+          <option value="long">Long tail (10 tokens)</option>
+          <option value="peaked">Peaked (3 dominant)</option>
+          <option value="flat">Flat-ish (uniform-ish)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · sorted probabilities + cutoff</div>
+        <svg id="viz-pane" viewBox="0 0 720 380" role="img"></svg>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The definition</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">Right now · cumulative crossing</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome · surviving nucleus</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    const SHAPES = {
+      long: [3.2, 2.6, 2.0, 1.5, 1.0, 0.5, 0.2, -0.1, -0.4, -0.8],
+      peaked: [4.5, 3.2, 2.7, 0.5, 0.2, 0.0, -0.3, -0.5, -0.7, -0.9],
+      flat: [0.4, 0.3, 0.2, 0.1, 0.0, -0.05, -0.1, -0.2, -0.25, -0.3],
+    };
+    const TOKENS = ['the', 'a', 'and', 'of', 'to', 'cat', 'sat', 'down', 'on', 'mat'];
+
+    function update() {
+      const p = Number(document.getElementById('p-slider').value);
+      const T = Number(document.getElementById('t-slider').value);
+      const shape = document.getElementById('dist-select').value;
+      document.getElementById('p-value').textContent = p.toFixed(2);
+      document.getElementById('t-value').textContent = T.toFixed(2);
+
+      const logits = SHAPES[shape];
+      const probs = Viz.softmax(logits, T);
+      const indexed = probs.map((pp, i) => ({ p: pp, i, tok: TOKENS[i] }))
+        .sort((a, b) => b.p - a.p);
+      const cum = Viz.cumsum(indexed.map((x) => x.p));
+
+      let cutoff = indexed.length;
+      for (let i = 0; i < cum.length; i++) {
+        if (cum[i] >= p) { cutoff = i + 1; break; }
+      }
+      const nucleus = indexed.slice(0, cutoff);
+      const nuc_mass = cum[cutoff - 1] || 0;
+      const renorm = nucleus.map((it) => ({ ...it, pNew: it.p / nuc_mass }));
+
+      const svg = document.getElementById('viz-pane');
+      svg.innerHTML = '';
+      const W = 720, H = 380, padL = 60, padR = 30, padT = 30, padB = 60;
+      const N = indexed.length;
+      const barW = (W - padL - padR) / N;
+      const accent = Viz.color('--accent');
+      const dim = Viz.color('--fg-faint');
+      const muted = Viz.color('--fg-muted');
+
+      [0, 0.25, 0.5, 0.75, 1].forEach((t) => {
+        const y = padT + (H - padT - padB) * (1 - t);
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', padL); line.setAttribute('x2', W - padR);
+        line.setAttribute('y1', y); line.setAttribute('y2', y);
+        line.setAttribute('stroke', muted); line.setAttribute('stroke-opacity', 0.25);
+        line.setAttribute('stroke-dasharray', '2 2');
+        svg.appendChild(line);
+        const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lbl.setAttribute('x', padL - 8); lbl.setAttribute('y', y + 4);
+        lbl.setAttribute('text-anchor', 'end'); lbl.setAttribute('font-size', 11);
+        lbl.setAttribute('fill', muted); lbl.setAttribute('font-family', 'JetBrains Mono');
+        lbl.textContent = t.toFixed(2);
+        svg.appendChild(lbl);
+      });
+
+      indexed.forEach((it, k) => {
+        const x = padL + k * barW + 4;
+        const w = barW - 8;
+        const inNucleus = k < cutoff;
+        const probH = (H - padT - padB) * it.p;
+        const probBar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        probBar.setAttribute('x', x); probBar.setAttribute('y', H - padB - probH);
+        probBar.setAttribute('width', w); probBar.setAttribute('height', probH);
+        probBar.setAttribute('fill', inNucleus ? accent : dim); probBar.setAttribute('rx', 4);
+        probBar.setAttribute('opacity', inNucleus ? 1 : 0.4);
+        svg.appendChild(probBar);
+
+        const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lbl.setAttribute('x', padL + k * barW + barW / 2);
+        lbl.setAttribute('y', H - padB + 18);
+        lbl.setAttribute('font-size', 11); lbl.setAttribute('text-anchor', 'middle');
+        lbl.setAttribute('fill', muted);
+        lbl.textContent = it.tok;
+        svg.appendChild(lbl);
+
+        const v = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        v.setAttribute('x', padL + k * barW + barW / 2);
+        v.setAttribute('y', H - padB - probH - 6);
+        v.setAttribute('font-size', 11); v.setAttribute('text-anchor', 'middle');
+        v.setAttribute('font-family', 'JetBrains Mono');
+        v.setAttribute('fill', inNucleus ? accent : muted);
+        v.textContent = it.p.toFixed(3);
+        svg.appendChild(v);
+      });
+
+      /* Cumulative line */
+      const cumPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      const d = cum.map((c, k) => {
+        const x = padL + k * barW + barW / 2;
+        const y = padT + (H - padT - padB) * (1 - c);
+        return `${k === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
+      }).join(' ');
+      cumPath.setAttribute('d', d);
+      cumPath.setAttribute('stroke', Viz.color('--c-3'));
+      cumPath.setAttribute('fill', 'none');
+      cumPath.setAttribute('stroke-width', 2);
+      svg.appendChild(cumPath);
+
+      /* p-cutoff dashed line */
+      const cy = padT + (H - padT - padB) * (1 - p);
+      const cutLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      cutLine.setAttribute('x1', padL); cutLine.setAttribute('x2', W - padR);
+      cutLine.setAttribute('y1', cy); cutLine.setAttribute('y2', cy);
+      cutLine.setAttribute('stroke', Viz.color('--c-3'));
+      cutLine.setAttribute('stroke-width', 1.5);
+      cutLine.setAttribute('stroke-dasharray', '6 4');
+      svg.appendChild(cutLine);
+      const cutLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      cutLbl.setAttribute('x', W - padR - 6); cutLbl.setAttribute('y', cy - 6);
+      cutLbl.setAttribute('text-anchor', 'end'); cutLbl.setAttribute('font-size', 11);
+      cutLbl.setAttribute('fill', Viz.color('--c-3')); cutLbl.setAttribute('font-family', 'JetBrains Mono');
+      cutLbl.textContent = `p = ${p.toFixed(2)}`;
+      svg.appendChild(cutLbl);
+
+      /* Legend */
+      const lg = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      lg.setAttribute('x', W - padR); lg.setAttribute('y', 18);
+      lg.setAttribute('text-anchor', 'end'); lg.setAttribute('font-size', 11);
+      lg.setAttribute('fill', muted);
+      lg.textContent = '■ probability   ─ cumulative   ╴╴ p cutoff';
+      svg.appendChild(lg);
+
+      const sortedP = indexed.map((it) => it.p);
+      Viz.renderEquations(
+        `V_p = \\arg\\min_{V}\\,\\sum_{i \\in V} p_i \\geq p \\\\[2pt] p_i' = \\dfrac{p_i}{\\sum_{j \\in V_p} p_j}`,
+        `\\begin{aligned}
+          \\text{sorted } p &= ${Viz.vec(sortedP, 3, 6)} \\\\
+          \\text{cumsum} &= ${Viz.vec(cum, 3, 6)} \\\\
+          \\text{cutoff at } &p = ${p.toFixed(2)} \\Rightarrow \\text{keep } ${cutoff} \\\\
+          \\text{nucleus mass} &= ${nuc_mass.toFixed(3)}
+        \\end{aligned}`
+      );
+
+      Viz.setOutput(document.getElementById('output-pane'), [
+        { label: 'temperature T', value: T.toFixed(2) },
+        { label: 'p threshold', value: p.toFixed(2) },
+        { label: 'tokens kept', value: cutoff, accent: true },
+        { label: 'tokens dropped', value: indexed.length - cutoff },
+        { label: 'nucleus mass', value: nuc_mass.toFixed(3), accent: true },
+        { label: 'nucleus tokens', value: nucleus.map((n) => `${n.tok}(${n.p.toFixed(2)})`).join('  ') },
+        { label: 'after renorm', value: renorm.map((n) => `${n.tok}=${n.pNew.toFixed(3)}`).join('  ') },
+      ]);
+    }
+
+    document.getElementById('p-slider').addEventListener('input', update);
+    document.getElementById('t-slider').addEventListener('input', update);
+    document.getElementById('dist-select').addEventListener('change', update);
+    window.addEventListener('themechange', update);
+
+    update();
+  });
+  </script>
+</body>
+</html>

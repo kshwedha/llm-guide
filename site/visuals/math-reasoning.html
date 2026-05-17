@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Math Reasoning — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Operations · Reasoning</span>
+      <h1 class="viz-page__title">Math Reasoning — Why Tokens Aren't Calculators</h1>
+      <p class="viz-page__subtitle">An LLM doing math is still emitting tokens — it's not computing. Compare three approaches on the same problem: greedy direct answer (often wrong), Chain-of-Thought (better, slower), and a tool call (correct, by delegating to Python). The substituted equation shows what the model actually emits at the answer position.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control">
+        <label class="viz-control__label" for="problem-select">Problem</label>
+        <select id="problem-select">
+          <option value="0">7 × 8 = ?</option>
+          <option value="1">23 × 17 = ?</option>
+          <option value="2">A train travels 60 km in 1.5 h. What's its average speed?</option>
+          <option value="3">If x + 5 = 12, what is x?</option>
+          <option value="4">What is 12.5% of 320?</option>
+        </select>
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="approach-select">Approach</label>
+        <select id="approach-select">
+          <option value="greedy">Greedy direct answer</option>
+          <option value="cot">Chain-of-Thought</option>
+          <option value="tool">Tool call (Python)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · how the model produces an answer</div>
+        <svg id="viz-pane" viewBox="0 0 720 380" role="img"></svg>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The formula</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">Right now · top tokens at the answer position</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome · prediction vs ground truth</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    /* For each problem, hand-shaped distributions show what greedy
+       direct decoding tends to produce vs how CoT tends to make the
+       distribution sharpen onto the right answer in the final step. */
+    const PROBLEMS = [
+      {
+        q: "7 × 8 = ?",
+        truth: "56",
+        greedy: { tokens: [["56", 0.34], ["54", 0.20], ["48", 0.18], ["64", 0.15], ["72", 0.13]], pick: 0 },
+        cot: {
+          steps: [
+            "Let me reason step by step.",
+            "7 × 8 means add 7 eight times.",
+            "7+7 = 14; 14+7 = 21; 21+7 = 28;",
+            "28+7 = 35; 35+7 = 42; 42+7 = 49; 49+7 = 56.",
+            "Therefore 7 × 8 = 56.",
+          ],
+          tokens: [["56", 0.91], ["54", 0.05], ["48", 0.02], ["64", 0.01], ["72", 0.01]],
+          pick: 0,
+        },
+        tool: { code: "print(7 * 8)", result: "56" },
+      },
+      {
+        q: "23 × 17 = ?",
+        truth: "391",
+        greedy: { tokens: [["381", 0.22], ["391", 0.18], ["361", 0.17], ["411", 0.16], ["390", 0.14]], pick: 0 },
+        cot: {
+          steps: [
+            "23 × 17 = 23 × (10 + 7).",
+            "23 × 10 = 230.",
+            "23 × 7 = 161.",
+            "230 + 161 = 391.",
+          ],
+          tokens: [["391", 0.88], ["381", 0.06], ["361", 0.03], ["411", 0.02], ["390", 0.01]],
+          pick: 0,
+        },
+        tool: { code: "print(23 * 17)", result: "391" },
+      },
+      {
+        q: "A train travels 60 km in 1.5 h. Average speed?",
+        truth: "40 km/h",
+        greedy: { tokens: [["40 km/h", 0.31], ["45 km/h", 0.20], ["60 km/h", 0.18], ["50 km/h", 0.16], ["35 km/h", 0.15]], pick: 0 },
+        cot: {
+          steps: [
+            "speed = distance / time.",
+            "speed = 60 / 1.5.",
+            "60 / 1.5 = 40.",
+            "Therefore 40 km/h.",
+          ],
+          tokens: [["40 km/h", 0.92], ["45 km/h", 0.04], ["60 km/h", 0.02], ["50 km/h", 0.01], ["35 km/h", 0.01]],
+          pick: 0,
+        },
+        tool: { code: "print(60 / 1.5)", result: "40.0" },
+      },
+      {
+        q: "x + 5 = 12, x = ?",
+        truth: "7",
+        greedy: { tokens: [["7", 0.62], ["8", 0.16], ["6", 0.12], ["12", 0.06], ["17", 0.04]], pick: 0 },
+        cot: {
+          steps: [
+            "Subtract 5 from both sides.",
+            "x = 12 - 5.",
+            "x = 7.",
+          ],
+          tokens: [["7", 0.96], ["8", 0.02], ["6", 0.01], ["12", 0.005], ["17", 0.005]],
+          pick: 0,
+        },
+        tool: { code: "print(12 - 5)", result: "7" },
+      },
+      {
+        q: "12.5% of 320 = ?",
+        truth: "40",
+        greedy: { tokens: [["40", 0.30], ["32", 0.22], ["48", 0.18], ["35", 0.16], ["50", 0.14]], pick: 0 },
+        cot: {
+          steps: [
+            "12.5% = 0.125.",
+            "0.125 × 320 = 320 / 8.",
+            "320 / 8 = 40.",
+          ],
+          tokens: [["40", 0.93], ["32", 0.04], ["48", 0.02], ["35", 0.005], ["50", 0.005]],
+          pick: 0,
+        },
+        tool: { code: "print(0.125 * 320)", result: "40.0" },
+      },
+    ];
+
+    function update() {
+      const pi = Number(document.getElementById('problem-select').value);
+      const approach = document.getElementById('approach-select').value;
+      const prob = PROBLEMS[pi];
+
+      /* ── Pane 1 — drawn differently per approach ── */
+      const svg = document.getElementById('viz-pane');
+      svg.innerHTML = '';
+      const W = 720, H = 380;
+      const accent = Viz.color('--accent');
+      const muted = Viz.color('--fg-muted');
+      const c3 = Viz.color('--c-3');
+      const ok = Viz.color('--c-4');
+      const err = '#ef4444';
+
+      const qTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      qTxt.setAttribute('x', 30); qTxt.setAttribute('y', 30);
+      qTxt.setAttribute('font-size', 14); qTxt.setAttribute('font-weight', 700);
+      qTxt.setAttribute('fill', Viz.color('--fg'));
+      qTxt.setAttribute('font-family', 'Inter');
+      qTxt.textContent = `Q: ${prob.q}`;
+      svg.appendChild(qTxt);
+
+      let predicted, isCorrect;
+
+      if (approach === 'greedy') {
+        const dist = prob.greedy.tokens;
+        predicted = dist[prob.greedy.pick][0];
+        isCorrect = predicted === prob.truth;
+
+        /* Show top-5 candidate answers */
+        dist.forEach((d, i) => {
+          const y = 70 + i * 50;
+          const w = d[1] * 400;
+          const isPick = i === prob.greedy.pick;
+
+          const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          lbl.setAttribute('x', 200); lbl.setAttribute('y', y + 4);
+          lbl.setAttribute('text-anchor', 'end');
+          lbl.setAttribute('font-size', 14); lbl.setAttribute('font-family', 'JetBrains Mono');
+          lbl.setAttribute('fill', isPick ? (d[0] === prob.truth ? ok : err) : Viz.color('--fg'));
+          lbl.setAttribute('font-weight', isPick ? 700 : 500);
+          lbl.textContent = '"' + d[0] + '"';
+          svg.appendChild(lbl);
+
+          const bar = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+          bar.setAttribute('x', 220); bar.setAttribute('y', y - 12);
+          bar.setAttribute('width', Math.max(2, w)); bar.setAttribute('height', 24);
+          bar.setAttribute('rx', 4);
+          bar.setAttribute('fill', isPick ? (d[0] === prob.truth ? ok : err) : Viz.color('--border-strong'));
+          bar.setAttribute('opacity', isPick ? 1 : 0.65);
+          svg.appendChild(bar);
+
+          const v = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          v.setAttribute('x', 220 + Math.max(2, w) + 8); v.setAttribute('y', y + 4);
+          v.setAttribute('font-size', 12); v.setAttribute('fill', muted);
+          v.textContent = d[1].toFixed(2);
+          svg.appendChild(v);
+        });
+
+        const note = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        note.setAttribute('x', 30); note.setAttribute('y', H - 22);
+        note.setAttribute('font-size', 12); note.setAttribute('fill', muted);
+        note.textContent = 'No reasoning — the model picks the most likely answer-shaped token. Often wrong on harder math.';
+        svg.appendChild(note);
+
+      } else if (approach === 'cot') {
+        predicted = prob.cot.tokens[prob.cot.pick][0];
+        isCorrect = predicted === prob.truth;
+
+        prob.cot.steps.forEach((s, i) => {
+          const y = 70 + i * 28;
+          const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          t.setAttribute('x', 30); t.setAttribute('y', y);
+          t.setAttribute('font-size', 13);
+          t.setAttribute('fill', Viz.color('--fg'));
+          t.setAttribute('font-family', 'JetBrains Mono');
+          t.textContent = `${i + 1}. ${s}`;
+          svg.appendChild(t);
+        });
+
+        const ans = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        ans.setAttribute('x', 30); ans.setAttribute('y', 70 + prob.cot.steps.length * 28 + 26);
+        ans.setAttribute('font-size', 16); ans.setAttribute('font-weight', 700);
+        ans.setAttribute('fill', isCorrect ? ok : err);
+        ans.setAttribute('font-family', 'JetBrains Mono');
+        ans.textContent = `→ Final answer: ${predicted}`;
+        svg.appendChild(ans);
+
+        const note = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        note.setAttribute('x', 30); note.setAttribute('y', H - 22);
+        note.setAttribute('font-size', 12); note.setAttribute('fill', muted);
+        note.textContent = 'Reasoning steps become part of the model\'s own context, sharpening the answer distribution.';
+        svg.appendChild(note);
+
+      } else { /* tool */
+        predicted = prob.tool.result;
+        isCorrect = predicted.startsWith(prob.truth) || prob.truth.startsWith(predicted);
+
+        const codeBox = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        codeBox.setAttribute('x', 30); codeBox.setAttribute('y', 70);
+        codeBox.setAttribute('width', W - 60); codeBox.setAttribute('height', 70);
+        codeBox.setAttribute('rx', 8);
+        codeBox.setAttribute('fill', Viz.color('--bg-soft'));
+        codeBox.setAttribute('stroke', Viz.color('--border-strong'));
+        svg.appendChild(codeBox);
+        const codeLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        codeLbl.setAttribute('x', 44); codeLbl.setAttribute('y', 92);
+        codeLbl.setAttribute('font-size', 11); codeLbl.setAttribute('fill', muted);
+        codeLbl.setAttribute('font-weight', 700);
+        codeLbl.textContent = 'MODEL EMITS · Python tool call';
+        svg.appendChild(codeLbl);
+        const code = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        code.setAttribute('x', 44); code.setAttribute('y', 122);
+        code.setAttribute('font-size', 16); code.setAttribute('font-family', 'JetBrains Mono');
+        code.setAttribute('fill', accent);
+        code.textContent = prob.tool.code;
+        svg.appendChild(code);
+
+        const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        arrow.setAttribute('x', W / 2); arrow.setAttribute('y', 168);
+        arrow.setAttribute('text-anchor', 'middle');
+        arrow.setAttribute('font-size', 18); arrow.setAttribute('fill', c3);
+        arrow.textContent = '↓ runtime executes ↓';
+        svg.appendChild(arrow);
+
+        const resultBox = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        resultBox.setAttribute('x', 30); resultBox.setAttribute('y', 192);
+        resultBox.setAttribute('width', W - 60); resultBox.setAttribute('height', 70);
+        resultBox.setAttribute('rx', 8);
+        resultBox.setAttribute('fill', isCorrect ? 'rgba(16,185,129,.10)' : 'rgba(239,68,68,.10)');
+        resultBox.setAttribute('stroke', isCorrect ? ok : err);
+        svg.appendChild(resultBox);
+        const resLbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        resLbl.setAttribute('x', 44); resLbl.setAttribute('y', 214);
+        resLbl.setAttribute('font-size', 11); resLbl.setAttribute('fill', muted);
+        resLbl.setAttribute('font-weight', 700);
+        resLbl.textContent = 'TOOL RETURNS · injected back into context';
+        svg.appendChild(resLbl);
+        const res = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        res.setAttribute('x', 44); res.setAttribute('y', 244);
+        res.setAttribute('font-size', 18); res.setAttribute('font-weight', 700);
+        res.setAttribute('font-family', 'JetBrains Mono');
+        res.setAttribute('fill', isCorrect ? ok : err);
+        res.textContent = '"' + prob.tool.result + '"';
+        svg.appendChild(res);
+
+        const note = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        note.setAttribute('x', 30); note.setAttribute('y', H - 22);
+        note.setAttribute('font-size', 12); note.setAttribute('fill', muted);
+        note.textContent = 'The model never computes — it delegates to a Python runtime. Always correct on what Python can do.';
+        svg.appendChild(note);
+      }
+
+      /* ── Equations ── */
+      const tokenSource = approach === 'tool' ? null :
+                          approach === 'greedy' ? prob.greedy : prob.cot;
+      const subRows = approach === 'tool'
+        ? `\\begin{aligned}
+            \\text{emitted} &: \\texttt{${prob.tool.code}} \\\\
+            \\text{executed in} &: \\text{Python sandbox} \\\\
+            \\text{returned} &: ${prob.tool.result} \\\\
+            \\text{injected back into context}
+          \\end{aligned}`
+        : `\\begin{aligned}
+            ${tokenSource.tokens.slice(0, 4).map((t, i) =>
+              `p(\\texttt{"${t[0]}"}) &= ${t[1].toFixed(2)}${i === tokenSource.pick ? '\\;\\checkmark' : ''}`
+            ).join('\\\\\n')}
+          \\end{aligned}`;
+
+      const formula = approach === 'tool'
+        ? `\\hat y = \\text{tool}\\!\\left(\\arg\\max_{c \\in \\text{code}} p(c \\mid \\text{prompt})\\right)\\\\[2pt] \\text{the model emits code, the runtime computes}`
+        : approach === 'cot'
+          ? `\\text{Insert reasoning tokens } r_{1:k} \\text{ before the answer:}\\\\[2pt] \\hat y = \\arg\\max_y p(y \\mid \\text{prompt}, r_{1:k})`
+          : `\\hat y = \\arg\\max_y p(y \\mid \\text{prompt})\\\\[2pt] \\text{(no scratch space, no tools)}`;
+
+      Viz.renderEquations(formula, subRows);
+
+      /* ── Outcome ── */
+      Viz.setOutput(document.getElementById('output-pane'), [
+        { label: 'approach',      value: approach.toUpperCase() },
+        { label: 'predicted',     value: '"' + predicted + '"', accent: isCorrect },
+        { label: 'ground truth',  value: '"' + prob.truth + '"' },
+        { label: 'correct?',      value: isCorrect ? '✓ yes' : '✗ no', accent: true },
+        { label: 'tokens used',   value: approach === 'greedy' ? '1' :
+                                          approach === 'cot' ? `~${prob.cot.steps.length * 12}` :
+                                          '~' + (prob.tool.code.length + prob.tool.result.length) },
+      ]);
+    }
+
+    ['problem-select', 'approach-select'].forEach((id) =>
+      document.getElementById(id).addEventListener('input', update));
+    window.addEventListener('themechange', update);
+    update();
+  });
+  </script>
+</body>
+</html>

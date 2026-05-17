@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Greedy vs Beam Search — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+  
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Decoding · Chapter 9</span>
+      <h1 class="viz-page__title">Greedy vs Beam Search</h1>
+      <p class="viz-page__subtitle">A 4-step generation tree. Greedy walks the locally-best edge each step; beam search keeps K best partials. The substituted equation shows the actual log-probabilities along each chosen path so you can see where greedy gets stuck.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control">
+        <label class="viz-control__label" for="beam-slider">Beam width K <span class="viz-control__value" id="beam-value">3</span></label>
+        <input id="beam-slider" type="range" min="1" max="6" step="1" value="3">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="seed-slider">Tree seed <span class="viz-control__value" id="seed-value">7</span></label>
+        <input id="seed-slider" type="range" min="1" max="50" step="1" value="7">
+      </div>
+      <button id="step-btn" class="viz-btn" type="button">Animate steps</button>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · generation tree</div>
+        <svg id="viz-pane" viewBox="0 0 720 380" role="img"></svg>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The sequence score</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">Right now · paths compared</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome · best sequences</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    const VOCAB = ['the', 'a', 'cat', 'dog', 'sat', 'ran', 'fast', 'slowly'];
+    const T = 4; /* tree depth */
+    const B = 3; /* branching factor */
+
+    function buildTree(seed) {
+      const rng = Viz.rng(seed);
+      const nodes = [];
+      const edges = [];
+      const root = { id: 0, depth: 0, token: '<bos>', logp: 0, parent: null };
+      nodes.push(root);
+      let queue = [root];
+      let nextId = 1;
+      for (let d = 1; d <= T; d++) {
+        const next = [];
+        queue.forEach((parent) => {
+          const logits = Array.from({ length: B }, () => rng() * 6 - 2);
+          const probs = Viz.softmax(logits);
+          probs.forEach((p, k) => {
+            const tok = VOCAB[(parent.id * 7 + d * 13 + k * 5) % VOCAB.length];
+            const node = {
+              id: nextId++, depth: d, token: tok,
+              logp: parent.logp + Math.log(p),
+              parent: parent.id, edgeP: p,
+            };
+            nodes.push(node);
+            edges.push({ from: parent.id, to: node.id });
+            next.push(node);
+          });
+        });
+        queue = next;
+      }
+      return { nodes, edges };
+    }
+
+    function greedyPath(tree) {
+      let cur = tree.nodes[0];
+      const path = [cur];
+      for (let d = 1; d <= T; d++) {
+        const children = tree.edges.filter((e) => e.from === cur.id)
+          .map((e) => tree.nodes.find((n) => n.id === e.to));
+        cur = children.reduce((best, n) => (n.edgeP > best.edgeP ? n : best), children[0]);
+        path.push(cur);
+      }
+      return path;
+    }
+
+    function beamSearch(tree, K) {
+      let beam = [tree.nodes[0]];
+      for (let d = 1; d <= T; d++) {
+        const cand = [];
+        beam.forEach((b) => {
+          tree.edges.filter((e) => e.from === b.id)
+            .forEach((e) => {
+              const child = tree.nodes.find((n) => n.id === e.to);
+              cand.push(child);
+            });
+        });
+        cand.sort((a, b) => b.logp - a.logp);
+        beam = cand.slice(0, K);
+      }
+      const sorted = [...beam].sort((a, b) => b.logp - a.logp);
+      const top = sorted[0];
+      const path = [top];
+      let cur = top;
+      while (cur.parent !== null) {
+        cur = tree.nodes.find((n) => n.id === cur.parent);
+        path.unshift(cur);
+      }
+      return { all: sorted, best: path };
+    }
+
+    function update() {
+      const K = Number(document.getElementById('beam-slider').value);
+      const seed = Number(document.getElementById('seed-slider').value);
+      document.getElementById('beam-value').textContent = K;
+      document.getElementById('seed-value').textContent = seed;
+
+      const tree = buildTree(seed);
+      const greedy = greedyPath(tree);
+      const beam = beamSearch(tree, K);
+
+      const svg = document.getElementById('viz-pane');
+      svg.innerHTML = '';
+      const W = 720, H = 380;
+      const xPad = 60, yPad = 40;
+      const accent = Viz.color('--accent');
+      const c3 = Viz.color('--c-3');
+      const muted = Viz.color('--fg-muted');
+
+      const byDepth = {};
+      tree.nodes.forEach((n) => { (byDepth[n.depth] = byDepth[n.depth] || []).push(n); });
+
+      Object.values(byDepth).forEach((nodes) => {
+        const d = nodes[0].depth;
+        const x = xPad + (d / T) * (W - 2 * xPad);
+        nodes.forEach((n, i) => {
+          n.x = x;
+          n.y = yPad + ((i + 0.5) / nodes.length) * (H - 2 * yPad);
+        });
+      });
+
+      tree.edges.forEach((e) => {
+        const a = tree.nodes.find((n) => n.id === e.from);
+        const b = tree.nodes.find((n) => n.id === e.to);
+        const onGreedy = greedy.some((n, k) => k > 0 && n.id === b.id && greedy[k - 1].id === a.id);
+        const onBeam = beam.best.some((n, k) => k > 0 && n.id === b.id && beam.best[k - 1].id === a.id);
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
+        line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
+        if (onBeam && onGreedy) {
+          line.setAttribute('stroke', c3); line.setAttribute('stroke-width', 3);
+        } else if (onGreedy) {
+          line.setAttribute('stroke', c3); line.setAttribute('stroke-width', 2.5);
+        } else if (onBeam) {
+          line.setAttribute('stroke', accent); line.setAttribute('stroke-width', 2.5);
+        } else {
+          line.setAttribute('stroke', muted); line.setAttribute('stroke-opacity', 0.25);
+        }
+        svg.appendChild(line);
+      });
+
+      tree.nodes.forEach((n) => {
+        const onGreedy = greedy.some((g) => g.id === n.id);
+        const onBeam = beam.best.some((g) => g.id === n.id);
+        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dot.setAttribute('cx', n.x); dot.setAttribute('cy', n.y);
+        dot.setAttribute('r', onGreedy || onBeam ? 7 : 4);
+        dot.setAttribute('fill', onBeam ? accent : (onGreedy ? c3 : Viz.color('--bg-elev')));
+        dot.setAttribute('stroke', onBeam ? accent : (onGreedy ? c3 : muted));
+        dot.setAttribute('stroke-width', 1.5);
+        svg.appendChild(dot);
+        if (onBeam || onGreedy || n.depth === 0) {
+          const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          lbl.setAttribute('x', n.x); lbl.setAttribute('y', n.y - 12);
+          lbl.setAttribute('text-anchor', 'middle'); lbl.setAttribute('font-size', 11);
+          lbl.setAttribute('font-family', 'JetBrains Mono'); lbl.setAttribute('fill', Viz.color('--fg'));
+          lbl.textContent = n.token;
+          svg.appendChild(lbl);
+        }
+      });
+
+      const lg = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      lg.setAttribute('x', W - 10); lg.setAttribute('y', 18);
+      lg.setAttribute('text-anchor', 'end'); lg.setAttribute('font-size', 11);
+      lg.setAttribute('fill', muted);
+      lg.innerHTML = `<tspan fill="${c3}">─ greedy</tspan>   <tspan fill="${accent}">─ beam best (K=${K})</tspan>`;
+      svg.appendChild(lg);
+
+      const greedyTokens = greedy.slice(1).map((n) => n.token).join(' ');
+      const beamTokens = beam.best.slice(1).map((n) => n.token).join(' ');
+      const greedyScore = greedy[greedy.length - 1].logp;
+      const beamScore = beam.best[beam.best.length - 1].logp;
+      const safe = (s) => s.replace(/_/g, '\\_').replace(/</g, '\\lt ');
+      Viz.renderEquations(
+        `\\text{score}(y_{1:T}) = \\sum_{t=1}^{T} \\log p(y_t \\mid y_{<t}) \\\\[2pt] \\hat{y} = \\arg\\max_{y \\in \\text{Beam}_K} \\,\\text{score}(y)`,
+        `\\begin{aligned}
+          \\text{greedy} &: ${greedyScore.toFixed(2)} \\;[\\,${safe(greedyTokens)}\\,] \\\\
+          \\text{beam (K=${K})} &: ${beamScore.toFixed(2)} \\;[\\,${safe(beamTokens)}\\,] \\\\
+          \\Delta &= ${(beamScore - greedyScore >= 0 ? '+' : '') + (beamScore - greedyScore).toFixed(2)} \\text{ log-prob}
+        \\end{aligned}`
+      );
+      const beamRank = beam.all.slice(0, K).map((n, i) => {
+        const path = [];
+        let cur = n;
+        while (cur.parent !== null) {
+          path.unshift(cur.token);
+          cur = tree.nodes.find((nn) => nn.id === cur.parent);
+        }
+        return `${i + 1}. ${path.join(' ')}  (${n.logp.toFixed(2)})`;
+      }).join('\n');
+
+      Viz.setOutput(document.getElementById('output-pane'), [
+        { label: 'greedy sequence', value: greedyTokens, accent: true },
+        { label: 'greedy log-prob', value: greedyScore.toFixed(2) },
+        { label: 'beam best', value: beamTokens, accent: true },
+        { label: 'beam log-prob', value: beamScore.toFixed(2) },
+        { label: 'improvement', value: `${(beamScore - greedyScore).toFixed(2)} log-prob` },
+        { label: `top ${K} beam`, value: '\n' + beamRank },
+      ]);
+    }
+
+    document.getElementById('beam-slider').addEventListener('input', update);
+    document.getElementById('seed-slider').addEventListener('input', update);
+    document.getElementById('step-btn').addEventListener('click', () => {
+      let seed = 1;
+      const id = setInterval(() => {
+        document.getElementById('seed-slider').value = seed;
+        update();
+        seed += 3;
+        if (seed > 30) clearInterval(id);
+      }, 400);
+    });
+    window.addEventListener('themechange', update);
+
+    update();
+  });
+  </script>
+</body>
+</html>

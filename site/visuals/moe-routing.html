@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MoE Routing — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+  
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Architecture · Chapter 3</span>
+      <h1 class="viz-page__title">Mixture-of-Experts Routing</h1>
+      <p class="viz-page__subtitle">Each token's hidden state is projected by W_g into expert logits. The substituted equation reveals which experts fire for the token you pick — only those run, so total parameters can be huge while compute stays small.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control">
+        <label class="viz-control__label" for="experts-slider">Experts E <span class="viz-control__value" id="experts-value">8</span></label>
+        <input id="experts-slider" type="range" min="2" max="16" step="1" value="8">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="topk-slider">Top-K <span class="viz-control__value" id="topk-value">2</span></label>
+        <input id="topk-slider" type="range" min="1" max="4" step="1" value="2">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="token-select">Token</label>
+        <select id="token-select">
+          <option value="0">"def"</option>
+          <option value="1">"the"</option>
+          <option value="2">"sklearn"</option>
+          <option value="3">"banana"</option>
+          <option value="4">"jurisprudence"</option>
+        </select>
+      </div>
+      <button id="reseed" class="viz-btn viz-btn--secondary" type="button">Reseed</button>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · routing graph</div>
+        <svg id="viz-pane" viewBox="0 0 720 380" role="img"></svg>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The gating equation</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">Right now · top-K mixture</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome · selected experts</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    const TOKENS = ['def', 'the', 'sklearn', 'banana', 'jurisprudence'];
+    const state = { seed: 42, E: 8, K: 2, t: 0 };
+
+    function update() {
+      state.E = Number(document.getElementById('experts-slider').value);
+      state.K = Number(document.getElementById('topk-slider').value);
+      state.t = Number(document.getElementById('token-select').value);
+      document.getElementById('experts-value').textContent = state.E;
+      document.getElementById('topk-value').textContent = state.K;
+
+      /* Build deterministic logits per (token, expert) so different tokens
+         consistently prefer different experts. */
+      const rng = Viz.rng(state.seed * 31 + state.t * 17);
+      const logits = Array.from({ length: state.E }, () => rng() * 4 - 2);
+      const probs = Viz.softmax(logits);
+      const idx = probs.map((p, i) => ({ p, i })).sort((a, b) => b.p - a.p);
+      const topK = idx.slice(0, state.K);
+      const topKMass = topK.reduce((s, e) => s + e.p, 0);
+      const renorm = topK.map((e) => ({ ...e, w: e.p / topKMass }));
+
+      const svg = document.getElementById('viz-pane');
+      svg.innerHTML = '';
+      const W = 720, H = 380;
+      const tokenX = 80, expertX = 540;
+      const tokenY = H / 2;
+      const accent = Viz.color('--accent');
+      const muted = Viz.color('--fg-muted');
+
+      /* Token node */
+      const tNode = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      tNode.setAttribute('x', tokenX - 60); tNode.setAttribute('y', tokenY - 22);
+      tNode.setAttribute('width', 120); tNode.setAttribute('height', 44);
+      tNode.setAttribute('rx', 8); tNode.setAttribute('fill', accent);
+      svg.appendChild(tNode);
+      const tTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      tTxt.setAttribute('x', tokenX); tTxt.setAttribute('y', tokenY + 6);
+      tTxt.setAttribute('text-anchor', 'middle'); tTxt.setAttribute('font-size', 15);
+      tTxt.setAttribute('font-family', 'JetBrains Mono'); tTxt.setAttribute('fill', '#fff');
+      tTxt.textContent = TOKENS[state.t];
+      svg.appendChild(tTxt);
+
+      /* Router box */
+      const rx = 240;
+      const rNode = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rNode.setAttribute('x', rx - 50); rNode.setAttribute('y', tokenY - 28);
+      rNode.setAttribute('width', 100); rNode.setAttribute('height', 56);
+      rNode.setAttribute('rx', 6); rNode.setAttribute('fill', 'none');
+      rNode.setAttribute('stroke', muted); rNode.setAttribute('stroke-width', 1.5);
+      svg.appendChild(rNode);
+      const rT = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      rT.setAttribute('x', rx); rT.setAttribute('y', tokenY - 6);
+      rT.setAttribute('text-anchor', 'middle'); rT.setAttribute('font-size', 13);
+      rT.setAttribute('fill', Viz.color('--fg')); rT.setAttribute('font-weight', 700);
+      rT.textContent = 'Router W_g';
+      svg.appendChild(rT);
+      const rT2 = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      rT2.setAttribute('x', rx); rT2.setAttribute('y', tokenY + 12);
+      rT2.setAttribute('text-anchor', 'middle'); rT2.setAttribute('font-size', 11);
+      rT2.setAttribute('fill', muted); rT2.textContent = 'softmax + Top-K';
+      svg.appendChild(rT2);
+
+      /* Edge token → router */
+      const e0 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      e0.setAttribute('x1', tokenX + 60); e0.setAttribute('y1', tokenY);
+      e0.setAttribute('x2', rx - 50); e0.setAttribute('y2', tokenY);
+      e0.setAttribute('stroke', accent); e0.setAttribute('stroke-width', 2);
+      svg.appendChild(e0);
+
+      /* Experts */
+      const eSpacing = (H - 60) / state.E;
+      probs.forEach((p, i) => {
+        const ey = 30 + i * eSpacing + eSpacing / 2;
+        const isTop = topK.some((tk) => tk.i === i);
+
+        const edge = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        edge.setAttribute('x1', rx + 50); edge.setAttribute('y1', tokenY);
+        edge.setAttribute('x2', expertX); edge.setAttribute('y2', ey);
+        edge.setAttribute('stroke', isTop ? accent : muted);
+        edge.setAttribute('stroke-width', isTop ? Math.max(2, p * 12) : 1);
+        edge.setAttribute('opacity', isTop ? 1 : 0.2);
+        svg.appendChild(edge);
+
+        const eRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        eRect.setAttribute('x', expertX); eRect.setAttribute('y', ey - 16);
+        eRect.setAttribute('width', 130); eRect.setAttribute('height', 32);
+        eRect.setAttribute('rx', 6); eRect.setAttribute('fill', isTop ? accent : 'none');
+        eRect.setAttribute('stroke', isTop ? accent : muted);
+        eRect.setAttribute('stroke-width', 1.5);
+        eRect.setAttribute('opacity', isTop ? 1 : 0.55);
+        svg.appendChild(eRect);
+
+        const eTxt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        eTxt.setAttribute('x', expertX + 65); eTxt.setAttribute('y', ey + 4);
+        eTxt.setAttribute('text-anchor', 'middle'); eTxt.setAttribute('font-size', 12);
+        eTxt.setAttribute('font-family', 'JetBrains Mono');
+        eTxt.setAttribute('fill', isTop ? '#fff' : Viz.color('--fg'));
+        eTxt.textContent = `E${i}  p=${p.toFixed(2)}`;
+        svg.appendChild(eTxt);
+      });
+
+      const topKLatex = renorm.map((e) => `E_{${e.i}}\\!\\!:\\, w=${e.w.toFixed(2)}`).join(',\\;');
+      Viz.renderEquations(
+        `g(x) = \\text{softmax}(W_g x) \\\\[2pt] \\text{out}(x) = \\sum_{i \\in \\mathrm{Top}_K} \\dfrac{g_i}{\\sum_{j} g_j} \\cdot E_i(x)`,
+        `\\begin{aligned}
+          g(x) &= ${Viz.vec(probs, 2, 6)} \\\\
+          \\text{Top-${state.K}} &: ${topKLatex} \\\\
+          \\text{mass kept} &= ${topKMass.toFixed(2)}
+        \\end{aligned}`
+      );
+
+      Viz.setOutput(document.getElementById('output-pane'), [
+        { label: 'token', value: TOKENS[state.t], accent: true },
+        { label: 'experts total', value: state.E },
+        { label: 'experts active', value: state.K, accent: true },
+        { label: 'gate probs', value: probs.map((p) => p.toFixed(2)).join('  ') },
+        { label: 'top-K experts', value: topK.map((e) => `E${e.i}(${e.p.toFixed(2)})`).join('  '), accent: true },
+        { label: 'normalized weights', value: renorm.map((e) => `E${e.i}=${e.w.toFixed(2)}`).join('  ') },
+        { label: 'compute fraction', value: `${(state.K / state.E * 100).toFixed(0)}% of dense FFN` },
+      ]);
+    }
+
+    ['experts', 'topk'].forEach((id) =>
+      document.getElementById(`${id}-slider`).addEventListener('input', update));
+    document.getElementById('token-select').addEventListener('change', update);
+    document.getElementById('reseed').addEventListener('click', () => {
+      state.seed = Math.floor(Math.random() * 1e9); update();
+    });
+    window.addEventListener('themechange', update);
+
+    update();
+  });
+  </script>
+</body>
+</html>

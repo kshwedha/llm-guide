@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gradient Descent — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+  
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Training · Chapter 7</span>
+      <h1 class="viz-page__title">Gradient Descent</h1>
+      <p class="viz-page__subtitle">A 2-D loss surface. Click anywhere to set a starting point, then step (or run) to watch parameters slide downhill. The substituted equation shows the actual numbers behind each step. Crank up the learning rate to see divergence in real time.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control">
+        <label class="viz-control__label" for="lr-slider">Learning rate η <span class="viz-control__value" id="lr-value">0.10</span></label>
+        <input id="lr-slider" type="range" min="0.001" max="0.5" step="0.001" value="0.1">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="surface-select">Surface</label>
+        <select id="surface-select">
+          <option value="bowl">Convex bowl</option>
+          <option value="saddle">Saddle</option>
+          <option value="rosenbrock">Rosenbrock-ish</option>
+        </select>
+      </div>
+      <button id="step-btn" class="viz-btn" type="button">Step</button>
+      <button id="run-btn" class="viz-btn" type="button">Run 50</button>
+      <button id="reset-btn" class="viz-btn viz-btn--secondary" type="button">Reset</button>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · loss landscape</div>
+        <svg id="viz-pane" viewBox="0 0 720 380" role="img"></svg>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The update rule</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">This iteration · numbers</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome · iteration state</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    const W = 720, H = 380, padL = 50, padR = 30, padT = 30, padB = 40;
+    const surfaces = {
+      bowl: {
+        L: (x, y) => 0.6 * x * x + 0.9 * y * y,
+        grad: (x, y) => [1.2 * x, 1.8 * y],
+        latex: 'L(x, y) = 0.6\\,x^{2} + 0.9\\,y^{2}',
+      },
+      saddle: {
+        L: (x, y) => x * x - y * y + 0.05 * (x ** 4 + y ** 4),
+        grad: (x, y) => [2 * x + 0.2 * x ** 3, -2 * y + 0.2 * y ** 3],
+        latex: 'L(x, y) = x^{2} - y^{2} + 0.05(x^{4} + y^{4})',
+      },
+      rosenbrock: {
+        L: (x, y) => (1 - x) ** 2 + 5 * (y - x * x) ** 2,
+        grad: (x, y) => [-2 * (1 - x) - 20 * x * (y - x * x), 10 * (y - x * x)],
+        latex: 'L(x, y) = (1 - x)^{2} + 5(y - x^{2})^{2}',
+      },
+    };
+
+    const state = {
+      surface: 'bowl',
+      lr: 0.1,
+      x: -1.6, y: 1.4,
+      path: [],
+      iter: 0,
+    };
+
+    function toScreen(x, y) {
+      const xMin = -2, xMax = 2, yMin = -2, yMax = 2;
+      return [
+        padL + (x - xMin) / (xMax - xMin) * (W - padL - padR),
+        padT + (yMax - y) / (yMax - yMin) * (H - padT - padB),
+      ];
+    }
+    function fromScreen(sx, sy) {
+      const xMin = -2, xMax = 2, yMin = -2, yMax = 2;
+      const x = xMin + (sx - padL) / (W - padL - padR) * (xMax - xMin);
+      const y = yMax - (sy - padT) / (H - padT - padB) * (yMax - yMin);
+      return [x, y];
+    }
+
+    function drawSurface() {
+      const svg = document.getElementById('viz-pane');
+      svg.innerHTML = '';
+      const surf = surfaces[state.surface];
+      const grid = 60;
+      const cellW = (W - padL - padR) / grid;
+      const cellH = (H - padT - padB) / grid;
+      const xMin = -2, xMax = 2, yMin = -2, yMax = 2;
+      const accent = Viz.color('--accent');
+
+      let losses = [];
+      const cells = [];
+      for (let i = 0; i < grid; i++) {
+        for (let j = 0; j < grid; j++) {
+          const x = xMin + (i + 0.5) / grid * (xMax - xMin);
+          const y = yMax - (j + 0.5) / grid * (yMax - yMin);
+          const l = surf.L(x, y);
+          losses.push(l);
+          cells.push({ i, j, l });
+        }
+      }
+      const minL = Math.min(...losses), maxL = Math.max(...losses);
+      const span = maxL - minL || 1;
+      cells.forEach((c) => {
+        const t = Math.max(0, Math.min(1, (c.l - minL) / span));
+        const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        rect.setAttribute('x', padL + c.i * cellW);
+        rect.setAttribute('y', padT + c.j * cellH);
+        rect.setAttribute('width', cellW + 0.5);
+        rect.setAttribute('height', cellH + 0.5);
+        rect.setAttribute('fill', accent);
+        rect.setAttribute('fill-opacity', (0.06 + t * 0.55).toFixed(3));
+        svg.appendChild(rect);
+      });
+
+      /* Path */
+      if (state.path.length > 1) {
+        const d = state.path.map(([x, y], k) => {
+          const [sx, sy] = toScreen(x, y);
+          return `${k === 0 ? 'M' : 'L'}${sx.toFixed(1)} ${sy.toFixed(1)}`;
+        }).join(' ');
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', d);
+        path.setAttribute('stroke', Viz.color('--c-3'));
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke-width', 2);
+        svg.appendChild(path);
+        state.path.forEach(([x, y], k) => {
+          const [sx, sy] = toScreen(x, y);
+          const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          dot.setAttribute('cx', sx); dot.setAttribute('cy', sy);
+          dot.setAttribute('r', k === state.path.length - 1 ? 6 : 3);
+          dot.setAttribute('fill', k === state.path.length - 1 ? Viz.color('--c-3') : Viz.color('--fg'));
+          svg.appendChild(dot);
+        });
+      }
+
+      /* Crosshair on current point */
+      const [cx, cy] = toScreen(state.x, state.y);
+      const ring = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      ring.setAttribute('cx', cx); ring.setAttribute('cy', cy);
+      ring.setAttribute('r', 8); ring.setAttribute('fill', 'none');
+      ring.setAttribute('stroke', Viz.color('--c-3')); ring.setAttribute('stroke-width', 2);
+      svg.appendChild(ring);
+
+      /* Click-to-set */
+      svg.onclick = (ev) => {
+        const rect = svg.getBoundingClientRect();
+        const sx = (ev.clientX - rect.left) * W / rect.width;
+        const sy = (ev.clientY - rect.top) * H / rect.height;
+        const [x, y] = fromScreen(sx, sy);
+        state.x = Math.max(-2, Math.min(2, x));
+        state.y = Math.max(-2, Math.min(2, y));
+        state.path = [[state.x, state.y]];
+        state.iter = 0;
+        update();
+      };
+    }
+
+    function step() {
+      const surf = surfaces[state.surface];
+      const [gx, gy] = surf.grad(state.x, state.y);
+      state.x -= state.lr * gx;
+      state.y -= state.lr * gy;
+      state.iter++;
+      state.path.push([state.x, state.y]);
+      if (state.path.length > 200) state.path.shift();
+    }
+
+    function update() {
+      state.lr = Number(document.getElementById('lr-slider').value);
+      state.surface = document.getElementById('surface-select').value;
+      document.getElementById('lr-value').textContent = state.lr.toFixed(3);
+
+      drawSurface();
+      const surf = surfaces[state.surface];
+      const [gx, gy] = surf.grad(state.x, state.y);
+      const loss = surf.L(state.x, state.y);
+      const gnorm = Math.sqrt(gx * gx + gy * gy);
+      const nextX = state.x - state.lr * gx;
+      const nextY = state.y - state.lr * gy;
+
+      Viz.renderEquations(
+        `\\theta_{t+1} = \\theta_t - \\eta\\,\\nabla L(\\theta_t)\\\\[2pt] ${surf.latex}`,
+        `\\begin{aligned}
+          \\theta_t &= (${Viz.fmt(state.x, 3)},\\, ${Viz.fmt(state.y, 3)}) \\\\
+          \\nabla L &= (${Viz.fmt(gx, 3)},\\, ${Viz.fmt(gy, 3)}) \\\\
+          \\theta_{t+1} &= \\theta_t - ${state.lr.toFixed(3)}\\cdot\\nabla L \\\\
+          &= (${Viz.fmt(nextX, 3)},\\, ${Viz.fmt(nextY, 3)})
+        \\end{aligned}`
+      );
+      Viz.setOutput(document.getElementById('output-pane'), [
+        { label: 'iteration t', value: state.iter, accent: true },
+        { label: 'θ = (x, y)', value: `(${Viz.fmt(state.x)}, ${Viz.fmt(state.y)})` },
+        { label: '∇L(θ)', value: `(${Viz.fmt(gx)}, ${Viz.fmt(gy)})` },
+        { label: '‖∇L‖₂', value: Viz.fmt(gnorm) },
+        { label: 'L(θ)', value: Viz.fmt(loss), accent: true },
+        { label: 'η · ‖∇L‖', value: Viz.fmt(state.lr * gnorm) },
+      ]);
+    }
+
+    document.getElementById('lr-slider').addEventListener('input', update);
+    document.getElementById('surface-select').addEventListener('change', () => {
+      state.path = [[state.x, state.y]]; state.iter = 0; update();
+    });
+    document.getElementById('step-btn').addEventListener('click', () => { step(); update(); });
+    document.getElementById('run-btn').addEventListener('click', () => {
+      let n = 0;
+      const id = setInterval(() => {
+        step(); update(); n++;
+        if (n >= 50 || !Number.isFinite(state.x) || Math.abs(state.x) > 50) clearInterval(id);
+      }, 30);
+    });
+    document.getElementById('reset-btn').addEventListener('click', () => {
+      state.x = -1.6; state.y = 1.4; state.path = [[state.x, state.y]]; state.iter = 0; update();
+    });
+    window.addEventListener('themechange', update);
+
+    state.path = [[state.x, state.y]];
+    update();
+  });
+  </script>
+</body>
+</html>

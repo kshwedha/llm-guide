@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Embedding Similarity — Visualization</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="../assets/css/reader.css">
+  <link rel="stylesheet" href="../assets/css/visuals.css">
+  
+</head>
+<body>
+  <header class="header">
+    <div class="header__brand">
+      <div class="header__logo">L</div>
+      <div class="header__title">LLM Engineering Bible</div>
+    </div>
+    <div class="header__spacer"></div>
+    <a href="index.html" class="header__btn">← Gallery</a>
+    <a href="../index.html" class="header__btn">Reader</a>
+    <button id="theme-toggle" class="header__btn" type="button">☾ Dark</button>
+  </header>
+
+  <main class="viz-page">
+    <a class="viz-page__back" href="index.html">← Back to gallery</a>
+    <div class="viz-page__hero">
+      <span class="viz-page__tag">Embeddings · Chapter 11</span>
+      <h1 class="viz-page__title">Embedding Similarity</h1>
+      <p class="viz-page__subtitle">A 2-D projection of cluster-based pseudo-embeddings. Click two words to compute cosine similarity. The substituted equation shows exactly which numbers go into the formula for the pair you picked.</p>
+    </div>
+
+    <div class="viz-controls">
+      <div class="viz-control">
+        <label class="viz-control__label" for="dim-slider">Embedding dim <span class="viz-control__value" id="dim-value">16</span></label>
+        <input id="dim-slider" type="range" min="2" max="64" step="2" value="16">
+      </div>
+      <div class="viz-control">
+        <label class="viz-control__label" for="noise-slider">Within-cluster noise σ <span class="viz-control__value" id="noise-value">0.30</span></label>
+        <input id="noise-slider" type="range" min="0" max="1.5" step="0.01" value="0.30">
+      </div>
+      <button id="reseed" class="viz-btn viz-btn--secondary" type="button">Reseed</button>
+    </div>
+
+    <div class="viz-panes">
+      <div class="viz-pane viz-pane--main">
+        <div class="viz-pane__label">Visualization · 2-D projection</div>
+        <svg id="viz-pane" viewBox="0 0 720 380" role="img"></svg>
+      </div>
+      <div class="viz-pane viz-pane--equation">
+        <div class="viz-pane__label">The formula</div>
+        <div id="equation-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--substituted">
+        <div class="viz-pane__label">Right now · selected pair</div>
+        <div id="substituted-pane"></div>
+      </div>
+      <div class="viz-pane viz-pane--output">
+        <div class="viz-pane__label">Outcome</div>
+        <div id="output-pane"></div>
+      </div>
+    </div>
+  </main>
+
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script src="../assets/js/viz-base.js"></script>
+  <script>
+  Viz.boot(() => {
+    const CLUSTERS = [
+      { name: 'animals',     color: '--c-1', words: ['cat', 'dog', 'lion', 'tiger', 'wolf', 'fox'] },
+      { name: 'vehicles',    color: '--c-2', words: ['car', 'truck', 'bike', 'bus', 'plane'] },
+      { name: 'fruits',      color: '--c-3', words: ['apple', 'orange', 'banana', 'grape', 'mango'] },
+      { name: 'emotions',    color: '--c-5', words: ['joy', 'anger', 'fear', 'love', 'pride'] },
+    ];
+
+    const state = { dim: 16, noise: 0.3, seed: 1, picked: [] };
+
+    function buildEmbeddings() {
+      const rng = Viz.rng(state.seed);
+      const D = state.dim;
+      const out = [];
+      const centers = CLUSTERS.map(() => Array.from({ length: D }, () => rng() * 2 - 1));
+      CLUSTERS.forEach((c, ci) => {
+        c.words.forEach((w) => {
+          const v = centers[ci].map((cv) => cv + (rng() * 2 - 1) * state.noise);
+          out.push({ word: w, vec: v, cluster: ci });
+        });
+      });
+      return out;
+    }
+
+    function project2D(items) {
+      const x = items.map((it) => it.vec.reduce((s, v, k) => s + v * Math.cos(k * 1.3), 0));
+      const y = items.map((it) => it.vec.reduce((s, v, k) => s + v * Math.sin(k * 1.7 + 0.5), 0));
+      const xMin = Math.min(...x), xMax = Math.max(...x);
+      const yMin = Math.min(...y), yMax = Math.max(...y);
+      return items.map((it, i) => ({
+        ...it,
+        x2: (x[i] - xMin) / (xMax - xMin || 1),
+        y2: (y[i] - yMin) / (yMax - yMin || 1),
+      }));
+    }
+
+    function cosine(a, b) {
+      const dot = a.reduce((s, v, i) => s + v * b[i], 0);
+      const na = Math.sqrt(a.reduce((s, v) => s + v * v, 0));
+      const nb = Math.sqrt(b.reduce((s, v) => s + v * v, 0));
+      return dot / (na * nb || 1);
+    }
+
+    function draw(items2d) {
+      const svg = document.getElementById('viz-pane');
+      svg.innerHTML = '';
+      const W = 720, H = 380;
+      const padL = 30, padR = 30, padT = 30, padB = 30;
+      items2d.forEach((it) => {
+        const cx = padL + it.x2 * (W - padL - padR);
+        const cy = padT + (1 - it.y2) * (H - padT - padB);
+        const isPicked = state.picked.includes(it.word);
+        const c = Viz.color(CLUSTERS[it.cluster].color);
+        const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        dot.setAttribute('cx', cx); dot.setAttribute('cy', cy);
+        dot.setAttribute('r', isPicked ? 9 : 6);
+        dot.setAttribute('fill', c);
+        dot.setAttribute('opacity', state.picked.length === 0 || isPicked ? 1 : 0.55);
+        dot.setAttribute('stroke', isPicked ? Viz.color('--fg') : 'none');
+        dot.setAttribute('stroke-width', 2);
+        dot.style.cursor = 'pointer';
+        dot.addEventListener('click', () => {
+          state.picked = state.picked.includes(it.word)
+            ? state.picked.filter((w) => w !== it.word)
+            : [...state.picked, it.word].slice(-2);
+          update();
+        });
+        svg.appendChild(dot);
+        const lbl = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        lbl.setAttribute('x', cx + 10); lbl.setAttribute('y', cy + 4);
+        lbl.setAttribute('font-size', 12); lbl.setAttribute('fill', Viz.color('--fg'));
+        lbl.setAttribute('font-family', 'JetBrains Mono');
+        lbl.style.pointerEvents = 'none';
+        lbl.textContent = it.word;
+        svg.appendChild(lbl);
+      });
+
+      /* Legend */
+      CLUSTERS.forEach((c, i) => {
+        const lx = 12, ly = 20 + i * 18;
+        const sw = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        sw.setAttribute('x', lx); sw.setAttribute('y', ly - 8);
+        sw.setAttribute('width', 12); sw.setAttribute('height', 12);
+        sw.setAttribute('fill', Viz.color(c.color)); sw.setAttribute('rx', 3);
+        svg.appendChild(sw);
+        const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        t.setAttribute('x', lx + 18); t.setAttribute('y', ly + 2);
+        t.setAttribute('font-size', 12); t.setAttribute('fill', Viz.color('--fg-muted'));
+        t.textContent = c.name;
+        svg.appendChild(t);
+      });
+    }
+
+    function update() {
+      state.dim = Number(document.getElementById('dim-slider').value);
+      state.noise = Number(document.getElementById('noise-slider').value);
+      document.getElementById('dim-value').textContent = state.dim;
+      document.getElementById('noise-value').textContent = state.noise.toFixed(2);
+
+      const items = buildEmbeddings();
+      const items2d = project2D(items);
+      draw(items2d);
+
+      let subLatex = `\\text{click two words to compute their similarity}`;
+      if (state.picked.length === 2) {
+        const a = items.find((it) => it.word === state.picked[0]);
+        const b = items.find((it) => it.word === state.picked[1]);
+        const dot = a.vec.reduce((s, v, i) => s + v * b.vec[i], 0);
+        const na = Math.sqrt(a.vec.reduce((s, v) => s + v * v, 0));
+        const nb = Math.sqrt(b.vec.reduce((s, v) => s + v * v, 0));
+        const sim = dot / (na * nb || 1);
+        subLatex = `\\begin{aligned}
+          \\mathbf{a}\\cdot\\mathbf{b} &= ${Viz.fmt(dot, 3)} \\\\
+          \\lVert\\mathbf{a}\\rVert &= ${Viz.fmt(na, 3)} \\\\
+          \\lVert\\mathbf{b}\\rVert &= ${Viz.fmt(nb, 3)} \\\\
+          \\cos\\theta &= \\dfrac{${Viz.fmt(dot, 3)}}{${Viz.fmt(na, 3)} \\cdot ${Viz.fmt(nb, 3)}} = ${Viz.fmt(sim, 3)}
+        \\end{aligned}`;
+      } else if (state.picked.length === 1) {
+        subLatex = `\\text{first: \\texttt{${state.picked[0]}} — click another word}`;
+      }
+      Viz.renderEquations(
+        `\\cos(\\theta) = \\dfrac{\\mathbf{a}\\cdot\\mathbf{b}}{\\lVert\\mathbf{a}\\rVert\\,\\lVert\\mathbf{b}\\rVert}`,
+        subLatex
+      );
+
+      const rows = [
+        { label: 'embedding dimension', value: state.dim },
+        { label: 'within-cluster σ', value: state.noise.toFixed(2) },
+      ];
+      if (state.picked.length === 2) {
+        const a = items.find((it) => it.word === state.picked[0]);
+        const b = items.find((it) => it.word === state.picked[1]);
+        const sim = cosine(a.vec, b.vec);
+        rows.push({ label: 'pair', value: `${a.word} ⇆ ${b.word}`, accent: true });
+        rows.push({ label: 'cluster', value: `${CLUSTERS[a.cluster].name} / ${CLUSTERS[b.cluster].name}` });
+        rows.push({ label: 'cosine similarity', value: sim.toFixed(3), accent: true });
+        rows.push({ label: 'angle θ', value: `${(Math.acos(Math.max(-1, Math.min(1, sim))) * 180 / Math.PI).toFixed(1)}°` });
+      } else if (state.picked.length === 1) {
+        rows.push({ label: 'first word', value: state.picked[0], accent: true });
+        rows.push({ label: 'instructions', value: 'click another word to compare' });
+      } else {
+        rows.push({ label: 'instructions', value: 'click two words on the chart' });
+      }
+      Viz.setOutput(document.getElementById('output-pane'), rows);
+    }
+
+    document.getElementById('dim-slider').addEventListener('input', update);
+    document.getElementById('noise-slider').addEventListener('input', update);
+    document.getElementById('reseed').addEventListener('click', () => {
+      state.seed = Math.floor(Math.random() * 1e9); state.picked = []; update();
+    });
+    window.addEventListener('themechange', update);
+
+    update();
+  });
+  </script>
+</body>
+</html>
