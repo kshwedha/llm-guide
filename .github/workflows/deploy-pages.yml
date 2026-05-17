@@ -1,0 +1,59 @@
+# @mitigates LLMGuide:CI:DeployPages against supply chain attack with pinned SHA actions
+# @mitigates LLMGuide:CI:DeployPages against credential abuse with minimal GITHUB_TOKEN permissions
+name: Deploy Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Build standalone.html
+        run: python site/build.py
+
+      - name: Stage Pages artifact
+        # @mitigates LLMGuide:CI:DeployPages against publishing unrelated files with explicit publish dir
+        run: |
+          mkdir -p _site
+          cp -r site/. _site/
+          cp LLM_COMPLETE_GUIDE.md _site/LLM_COMPLETE_GUIDE.md
+
+      - name: Configure Pages
+        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
